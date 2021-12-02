@@ -12,7 +12,7 @@ def init():
 def cond(cond):
     if hasattr(cond, '_vhash'):
         vs = cond._vhash
-        res = vs[LOGICAL_PATH]
+        res = vs.get(LOGICAL_PATH, vs[MAINLINE])
         # mark all others weakly killed.
         for k in vs:
             if vs[k] != res:
