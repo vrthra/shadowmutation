@@ -1,7 +1,13 @@
+import os
+
 MAINLINE = '0'
 LOGICAL_PATH = '0'
 WEAKLY_KILLED = {}
 
+def init():
+    # initializing shadow
+    global LOGICAL_PATH
+    LOGICAL_PATH = os.environ.get('LOGICAL_PATH', '0')
 
 def cond(cond):
     if hasattr(cond, '_vhash'):
@@ -203,3 +209,5 @@ def tassert(bval):
     for k in WEAKLY_KILLED:
         print(k)
     assert vs['0']
+
+init()
