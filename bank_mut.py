@@ -44,10 +44,6 @@ class BankAccount:
             '4.1':shadow.untaint(self.balance / i), # mutation op *//
             })
 
-    def overdrawn(self):
-        return self.overdrawn
-
-
 def test_accounts():
     my_account = BankAccount(0)
     my_account.deposit(5)
@@ -56,5 +52,6 @@ def test_accounts():
     #my_account.interest(1)
     #my_account.interest(2)
     shadow.tassert(my_account.balance == 0)
+    shadow.tassert(my_account.overdrawn == False)
 
 test_accounts()
