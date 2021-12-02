@@ -11,6 +11,8 @@ $ python3 ./bank_mut.py
 2.2 False
 3.1 False
 3.2 False
+WEAKLY_KILLED
+2.1
 ```
 
 The `0` is the main line (no mutations). Others are result from each indicated mutants.
