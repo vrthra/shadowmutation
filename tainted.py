@@ -165,4 +165,8 @@ def tassert(bval):
     vs = bval._vhash
     for k in sorted(vs):
         print(k, vs[k])
+
+    print('WEAKLY_KILLED')
+    for k in WEAKLY_KILLED:
+        print(k)
     assert vs['0']
