@@ -34,7 +34,11 @@ def tassert(bval):
             print(k)
         assert vs['0']
     else:
-        assert bval
+        if MAINLINE != LOGICAL_PATH:
+            print('STRONGLY_KILLED')
+            print(LOGICAL_PATH)
+        else:
+            assert bval
 
 
 def tainted_op(first, other, op, primitive_kind):
