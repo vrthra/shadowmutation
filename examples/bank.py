@@ -1,8 +1,15 @@
 class BankAccount:
     def __init__(self, initial_balance):
         self.balance = initial_balance
-        if self.balance >= 0:
+        if self.balance >= 100:
+            print("not overdrawn")
             self.overdrawn = False
+        elif self.balance >= 0:
+            print("all good")
+            self.overdrawn = False
+        elif self.balance < -100:
+            print("very overdrawn")
+            self.overdrawn = True
         else:
             self.overdrawn = True
 

@@ -1,4 +1,6 @@
 import os
+from copy import deepcopy
+from contextlib import contextmanager
 
 MAINLINE = '0'
 LOGICAL_PATH = '0'
@@ -12,17 +14,20 @@ def init():
     global LOGICAL_PATH
     LOGICAL_PATH = os.environ.get('LOGICAL_PATH', '0')
 
-def cond(cond):
+
+def t_cond(cond):
     if hasattr(cond, '_vhash'):
-        vs = cond._vhash
+        vs = deepcopy(cond._vhash)
         res = vs.get(LOGICAL_PATH, vs[MAINLINE])
         # mark all others weakly killed.
         for k in vs:
             if vs[k] != res:
                 WEAKLY_KILLED[k] = True
+        SHADOW_TAINT_STACK.append(vs)
         return res
     else:
         return cond
+
 
 def t_assert(bval):
     if hasattr(bval, '_vhash'):
@@ -222,8 +227,15 @@ class tfloat_(float):
         return "float_t(%f)" % float(self)
 
 
+@contextmanager
+def t_context():
+    print("Enter:", SHADOW_TAINT_STACK)
+    yield
+    print("Leave:", SHADOW_TAINT_STACK)
+    SHADOW_TAINT_STACK.pop()
+
+
 def t_assign(mutation_counter, right):
-    print("assign_tainted_right_hand", mutation_counter, right)
     if isinstance(right, int):
         return tint({
             '0':  right, # mainline, no mutation
@@ -234,7 +246,6 @@ def t_assign(mutation_counter, right):
 
 
 def t_aug_add(mutation_counter, left, right):
-    print("aug_assign_tainted_add", mutation_counter, left, right)
     if isinstance(left, int) and isinstance(right, int):
         return tint({
             '0': left + right, # mainline -- no mutation
@@ -248,7 +259,6 @@ def t_aug_add(mutation_counter, left, right):
 
 
 def t_aug_sub(mutation_counter, left, right):
-    print("aug_assign_tainted_sub", mutation_counter, left, right)
     if isinstance(left, int) and isinstance(right, int):
         return tint({
             '0': left - right, # mainline -- no mutation
@@ -262,7 +272,6 @@ def t_aug_sub(mutation_counter, left, right):
 
 
 def t_aug_mult(mutation_counter, left, right):
-    print("aug_assign_tainted_mult", mutation_counter, left, right)
     if isinstance(left, int) and isinstance(right, int):
         return tint({
             '0': left * right, # mainline -- no mutation

@@ -5,7 +5,9 @@ from copy import deepcopy
 
 
 TAINT_MEMBERS = [
+    "t_cond",
     "t_assert",
+    "t_context",
     "t_assign",
     "t_aug_add",
     "t_aug_sub",
@@ -35,26 +37,37 @@ def apply_transformer(transformer, node):
 
 class CtxToLoadTransformer(ast.NodeTransformer):
     def visit_Name(self, node):
+        node = self.generic_visit(node)
         node.ctx = ast.Load()
         return node
 
     def visit_Attribute(self, node):
+        node = self.generic_visit(node)
         node.ctx = ast.Load()
         return node
 
 
 class CtxToStoreTransformer(ast.NodeTransformer):
     def visit_Name(self, node):
+        node = self.generic_visit(node)
         node.ctx = ast.Store()
         return node
 
     def visit_Attribute(self, node):
+        node = self.generic_visit(node)
         node.ctx = ast.Store()
         return node
 
 
 class ShadowExecutionTransformer(ast.NodeTransformer):
+    def wrap_with(self, node, func_id):
+        scope_expr = ast.Call(func=ast.Name(id=func_id, ctx=ast.Load()), args=[], keywords=[])
+        new_node = ast.With([scope_expr], body=[node])
+        return new_node
+
+
     def visit_Assert(self, node):
+        node = self.generic_visit(node)
         if isinstance(node.test, ast.Compare) and \
                 len(node.test.ops) == 1 and \
                 isinstance(node.test.ops[0], ast.Eq):
@@ -72,6 +85,8 @@ class ShadowExecutionTransformer(ast.NodeTransformer):
 
     def visit_Assign(self, node):
         global mutation_counter
+        node = self.generic_visit(node)
+
         cur_mut_ctr = ast.Constant(mutation_counter.get(), 'int')
         # Create the call to the tainted version of the right hand of the assign.
         call = ast.Call(
@@ -88,6 +103,7 @@ class ShadowExecutionTransformer(ast.NodeTransformer):
         return node
 
     def visit_AugAssign(self, node):
+        node = self.generic_visit(node)
         def change_to_tainted_call(call_id):
             global mutation_counter
             cur_mut_ctr = ast.Constant(mutation_counter.get(), 'int')
@@ -120,6 +136,18 @@ class ShadowExecutionTransformer(ast.NodeTransformer):
         if isinstance(node.op, ast.Mult):
             return change_to_tainted_call('t_aug_mult')
         return node
+
+
+    def visit_If(self, node):
+        node = self.generic_visit(node)
+        assert len(node.test.ops) == 1 and len(node.test.comparators) == 1
+        wrapped_test = ast.Call(
+            func=ast.Name(id='t_cond', ctx=ast.Load()),
+            args=[node.test],
+            keywords=[]
+        )
+        node.test = wrapped_test
+        return self.wrap_with(node, 't_context')
 
 
 def load_and_mutate(path):
