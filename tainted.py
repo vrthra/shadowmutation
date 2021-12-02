@@ -1,4 +1,3 @@
-import functools
 MAINLINE = '0'
 LOGICAL_PATH = '0'
 WEAKLY_KILLED = {}
@@ -45,7 +44,6 @@ def untaint(obj):
         return obj._vhash[MAINLINE]
     return obj
 
-@functools.total_ordering
 class tint(int):
     def __new__(cls, vhash, *args, **kwargs):
         oval = vhash[MAINLINE]
@@ -84,8 +82,24 @@ class tint(int):
         vs = tainted_op(self, other, lambda x, y: x == y, {int})
         return tbool({**self._vhash, **vs})
 
+    def __ne__(self, other):
+        vs = tainted_op(self, other, lambda x, y: x != y, {int})
+        return tbool({**self._vhash, **vs})
+
     def __lt__(self, other):
         vs = tainted_op(self, other, lambda x, y: x < y, {int})
+        return tbool({**self._vhash, **vs})
+
+    def __le__(self, other):
+        vs = tainted_op(self, other, lambda x, y: x <= y, {int})
+        return tbool({**self._vhash, **vs})
+
+    def __ge__(self, other):
+        vs = tainted_op(self, other, lambda x, y: x >= y, {int})
+        return tbool({**self._vhash, **vs})
+
+    def __gt__(self, other):
+        vs = tainted_op(self, other, lambda x, y: x > y, {int})
         return tbool({**self._vhash, **vs})
 
     def __str__(self):
@@ -94,7 +108,6 @@ class tint(int):
     def __repr__(self):
         return "int_t(%d)" % int(self)
 
-@functools.total_ordering
 class tbool(int):
     def __new__(cls, vhash, *args, **kwargs):
         oval = vhash[MAINLINE]
@@ -106,8 +119,8 @@ class tbool(int):
         vs = tainted_op(self, other, lambda x, y: x == y, {int, float, str})
         return tbool({**self._vhash, **vs})
 
-    def __lt__(self, other):
-        vs = tainted_op(self, other, lambda x, y: x < y, {int, float})
+    def __ne__(self, other):
+        vs = tainted_op(self, other, lambda x, y: x != y, {int, float})
         return tbool({**self._vhash, **vs})
 
     def __str__(self):
@@ -117,7 +130,6 @@ class tbool(int):
         return "bool_t(%s)" % bool(self)
 
 
-@functools.total_ordering
 class tfloat_(float):
     def __new__(cls, vhash, *args, **kwargs):
         oval = vhash[MAINLINE]
@@ -153,6 +165,27 @@ class tfloat_(float):
     def __lt__(self, other):
         vs = tainted_op(self, other, lambda x, y: x < y, {float})
         return tbool({**self._vhash, **vs})
+
+    def __ne__(self, other):
+        vs = tainted_op(self, other, lambda x, y: x != y, {int})
+        return tbool({**self._vhash, **vs})
+
+    def __lt__(self, other):
+        vs = tainted_op(self, other, lambda x, y: x < y, {int})
+        return tbool({**self._vhash, **vs})
+
+    def __le__(self, other):
+        vs = tainted_op(self, other, lambda x, y: x <= y, {int})
+        return tbool({**self._vhash, **vs})
+
+    def __ge__(self, other):
+        vs = tainted_op(self, other, lambda x, y: x >= y, {int})
+        return tbool({**self._vhash, **vs})
+
+    def __gt__(self, other):
+        vs = tainted_op(self, other, lambda x, y: x > y, {int})
+        return tbool({**self._vhash, **vs})
+
 
     def __str__(self):
         return "%f" % float(self)
