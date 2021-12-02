@@ -1,5 +1,12 @@
-all:
-	python3 ./bank_mut.py
+export PYTHONPATH := $(shell pwd):$(PYTHONPATH)
 
-do-2.1:
-	LOGICAL_PATH=2.1 python3 ./bank_mut.py
+all: tmp
+	python3 ./ast_mutator.py examples/bank.py tmp/bank_mut.py
+	python3 ./tmp/bank_mut.py
+
+do-2.1: tmp
+	python3 ./ast_mutator.py examples/bank.py tmp/bank_mut.py
+	LOGICAL_PATH=2.1 python3 ./tmp/bank_mut.py
+
+tmp:
+	mkdir tmp

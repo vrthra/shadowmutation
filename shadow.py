@@ -4,6 +4,9 @@ MAINLINE = '0'
 LOGICAL_PATH = '0'
 WEAKLY_KILLED = {}
 
+# Need a shadow taint stack for each thread if we want to support multiple threads.
+SHADOW_TAINT_STACK = []
+
 def init():
     # initializing shadow
     global LOGICAL_PATH
@@ -21,7 +24,7 @@ def cond(cond):
     else:
         return cond
 
-def tassert(bval):
+def t_assert(bval):
     if hasattr(bval, '_vhash'):
         vs = bval._vhash
         print('STRONGLY_KILLED')
@@ -100,8 +103,8 @@ class tint(int):
         return self.__class__({**self._vhash, **vs})
 
     def __div__(self, other):
-        vs = taitned__op(self, other, lambda x, y: x / y, {int})
-        return tfloat({**self._vhash, **vs})
+        vs = tainted_op(self, other, lambda x, y: x / y, {int})
+        return tfloat_({**self._vhash, **vs})
 
     def __eq__(self, other):
         vs = tainted_op(self, other, lambda x, y: x == y, {int})
@@ -180,8 +183,8 @@ class tfloat_(float):
         return self.__class__({**self._vhash, **vs})
 
     def __div__(self, other):
-        vs = taitned__op(self, other, lambda x, y: x / y, {float})
-        return tfloat({**self._vhash, **vs})
+        vs = tainted_op(self, other, lambda x, y: x / y, {float})
+        return tfloat_({**self._vhash, **vs})
 
     def __eq__(self, other):
         vs = tainted_op(self, other, lambda x, y: x == y, {float})
@@ -217,6 +220,56 @@ class tfloat_(float):
 
     def __repr__(self):
         return "float_t(%f)" % float(self)
+
+
+def t_assign(mutation_counter, right):
+    print("assign_tainted_right_hand", mutation_counter, right)
+    if isinstance(right, int):
+        return tint({
+            '0':  right, # mainline, no mutation
+            f'{mutation_counter}.1': right + 1 # mutation +1
+        })
+    else:
+        return right
+
+
+def t_aug_add(mutation_counter, left, right):
+    print("aug_assign_tainted_add", mutation_counter, left, right)
+    if isinstance(left, int) and isinstance(right, int):
+        return tint({
+            '0': left + right, # mainline -- no mutation
+            f'{mutation_counter}.1': untaint(left - right), # mutation op +/-
+        }) + tint({
+            '0':0, # main line -- no mutation
+            f'{mutation_counter}.2':1, # mutation +1
+        })
+    else:
+        raise ValueError(f"Unhandled tainted add types: {right} {left}")
+
+
+def t_aug_sub(mutation_counter, left, right):
+    print("aug_assign_tainted_sub", mutation_counter, left, right)
+    if isinstance(left, int) and isinstance(right, int):
+        return tint({
+            '0': left - right, # mainline -- no mutation
+            f'{mutation_counter}.1': untaint(left + right), # mutation op +/-
+        }) + tint({
+            '0':0, # main line -- no mutation
+            f'{mutation_counter}.2':1, # mutation +1
+        })
+    else:
+        raise ValueError(f"Unhandled tainted add types: {right} {left}")
+
+
+def t_aug_mult(mutation_counter, left, right):
+    print("aug_assign_tainted_mult", mutation_counter, left, right)
+    if isinstance(left, int) and isinstance(right, int):
+        return tint({
+            '0': left * right, # mainline -- no mutation
+            f'{mutation_counter}.1': untaint(left / right), # mutation op *//
+        })
+    else:
+        raise ValueError(f"Unhandled tainted add types: {right} {left}")
 
 
 init()
