@@ -1,8 +1,20 @@
 import functools
 MAINLINE = '0'
+LOGICAL_PATH = '0'
+WEAKLY_KILLED = {}
+
 
 def cond(cond):
-    return cond
+    if hasattr(cond, '_vhash'):
+        vs = cond._vhash
+        res = vs[LOGICAL_PATH]
+        # mark all others weakly killed.
+        for k in vs:
+            if vs[k] != res:
+                WEAKLY_KILLED[k] = True
+        return res
+    else:
+        return cond
 
 
 def tainted_op(first, other, op, primitive_kind):
