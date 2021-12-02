@@ -21,6 +21,21 @@ def cond(cond):
     else:
         return cond
 
+def tassert(bval):
+    if hasattr(bval, '_vhash'):
+        vs = bval._vhash
+        print('STRONGLY_KILLED')
+        for k in sorted(vs):
+            if vs[k]:
+                print(k, vs[k])
+
+        print('WEAKLY_KILLED')
+        for k in WEAKLY_KILLED:
+            print(k)
+        assert vs['0']
+    else:
+        assert bval
+
 
 def tainted_op(first, other, op, primitive_kind):
     vs = first._vhash
@@ -199,20 +214,5 @@ class tfloat_(float):
     def __repr__(self):
         return "float_t(%f)" % float(self)
 
-
-def tassert(bval):
-    if hasattr(cond, '_vhash'):
-        vs = bval._vhash
-        print('STRONGLY_KILLED')
-        for k in sorted(vs):
-            if vs[k]:
-                print(k, vs[k])
-
-        print('WEAKLY_KILLED')
-        for k in WEAKLY_KILLED:
-            print(k)
-        assert vs['0']
-    else:
-        assert bval
 
 init()
