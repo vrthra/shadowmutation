@@ -1,6 +1,9 @@
 import functools
 MAINLINE = '0'
 
+def cond(cond):
+    return cond
+
 
 def tainted_op(first, other, op, primitive_kind):
     vs = first._vhash

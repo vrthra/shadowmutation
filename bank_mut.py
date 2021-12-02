@@ -1,5 +1,5 @@
 import tainted
-class BankAccount_:
+class BankAccount:
     def __init__(self, initial_balance):
         # the value indicated by '0' is the main line.
         self.balance = tainted.tint({
@@ -49,7 +49,7 @@ class BankAccount_:
 
 
 def test_accounts():
-    my_account = BankAccount_(10)
+    my_account = BankAccount(10)
     my_account.deposit(5)
     my_account.withdraw(10)
     # try one of each
