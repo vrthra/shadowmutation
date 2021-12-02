@@ -49,12 +49,12 @@ class BankAccount:
 
 
 def test_accounts():
-    my_account = BankAccount(10)
+    my_account = BankAccount(0)
     my_account.deposit(5)
-    my_account.withdraw(10)
+    my_account.withdraw(5)
     # try one of each
     #my_account.interest(1)
     #my_account.interest(2)
-    tainted.tassert(my_account.balance == 5)
+    tainted.tassert(my_account.balance == 0)
 
 test_accounts()
