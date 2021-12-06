@@ -147,7 +147,7 @@ class ShadowExecutionTransformer(ast.NodeTransformer):
             keywords=[]
         )
         node.test = wrapped_test
-        return self.wrap_with(node, 't_context')
+        return node
 
 
 def load_and_mutate(path):

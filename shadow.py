@@ -1,13 +1,17 @@
 import os
+import sys
 from copy import deepcopy
 from contextlib import contextmanager
+
+import logging
+logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
 
 MAINLINE = '0'
 LOGICAL_PATH = '0'
 WEAKLY_KILLED = {}
 
-# Need a shadow taint stack for each thread if we want to support multiple threads.
-SHADOW_TAINT_STACK = []
 
 def init():
     # initializing shadow
@@ -22,8 +26,8 @@ def t_cond(cond):
         # mark all others weakly killed.
         for k in vs:
             if vs[k] != res:
+                logger.debug(f"t_cond WEAKLY_KILLED: {k}")
                 WEAKLY_KILLED[k] = True
-        SHADOW_TAINT_STACK.append(vs)
         return res
     else:
         return cond
@@ -32,24 +36,26 @@ def t_cond(cond):
 def t_assert(bval):
     if hasattr(bval, '_vhash'):
         vs = bval._vhash
-        print('STRONGLY_KILLED')
+        logger.info('STRONGLY_KILLED')
         for k in sorted(vs):
-            if vs[k]:
-                print(k, vs[k])
+            if not vs[k]:
+                logger.info("killed: %s %s", k, vs[k])
 
-        print('WEAKLY_KILLED')
+        logger.info('WEAKLY_KILLED')
         for k in WEAKLY_KILLED:
-            print(k)
+            logger.info(k)
+
+        # Do the actual assertion as would be done in the unchanged program
         assert vs['0']
     else:
         if MAINLINE != LOGICAL_PATH:
-            print('STRONGLY_KILLED')
-            print(LOGICAL_PATH)
+            logger.info(f'STRONGLY_KILLED: {LOGICAL_PATH}')
         else:
             assert bval
 
 
 def tainted_op(first, other, op, primitive_kind):
+    logger.debug("op: %s %s", first, other)
     vs = first._vhash
     if type(other) in primitive_kind:
         # now do the operation on all values.
@@ -72,10 +78,12 @@ def tainted_op(first, other, op, primitive_kind):
     else:
         assert False
 
+
 def untaint(obj):
     if hasattr(obj, '_vhash'):
         return obj._vhash[MAINLINE]
     return obj
+
 
 class tint(int):
     def __new__(cls, vhash, *args, **kwargs):
@@ -149,7 +157,7 @@ class tbool(int):
         return res
 
     def __eq__(self, other):
-        vs = tainted_op(self, other, lambda x, y: x == y, {int, float, str})
+        vs = tainted_op(self, other, lambda x, y: x == y, {bool, int, float, str})
         return tbool({**self._vhash, **vs})
 
     def __ne__(self, other):
@@ -229,24 +237,28 @@ class tfloat_(float):
 
 @contextmanager
 def t_context():
-    print("Enter:", SHADOW_TAINT_STACK)
     yield
-    print("Leave:", SHADOW_TAINT_STACK)
-    SHADOW_TAINT_STACK.pop()
 
 
 def t_assign(mutation_counter, right):
+
+    if isinstance(right, bool):
+        return tbool({
+            '0': right, # mainline, no mutation
+            f'{mutation_counter}.1': not right, # mutation +1
+        })
+
     if isinstance(right, int):
         return tint({
             '0':  right, # mainline, no mutation
-            f'{mutation_counter}.1': right + 1 # mutation +1
+            f'{mutation_counter}.1': right + 1, # mutation +1
         })
-    else:
-        return right
+
+    return right
 
 
 def t_aug_add(mutation_counter, left, right):
-    if isinstance(left, int) and isinstance(right, int):
+    if isinstance(left, (int, tint)) and isinstance(right, (int, tint)):
         return tint({
             '0': left + right, # mainline -- no mutation
             f'{mutation_counter}.1': untaint(left - right), # mutation op +/-
@@ -259,7 +271,7 @@ def t_aug_add(mutation_counter, left, right):
 
 
 def t_aug_sub(mutation_counter, left, right):
-    if isinstance(left, int) and isinstance(right, int):
+    if isinstance(left, (int, tint)) and isinstance(right, (int, tint)):
         return tint({
             '0': left - right, # mainline -- no mutation
             f'{mutation_counter}.1': untaint(left + right), # mutation op +/-
@@ -272,7 +284,7 @@ def t_aug_sub(mutation_counter, left, right):
 
 
 def t_aug_mult(mutation_counter, left, right):
-    if isinstance(left, int) and isinstance(right, int):
+    if isinstance(left, (int, tint)) and isinstance(right, (int, tint)):
         return tint({
             '0': left * right, # mainline -- no mutation
             f'{mutation_counter}.1': untaint(left / right), # mutation op *//
