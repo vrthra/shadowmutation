@@ -1,6 +1,6 @@
 import pytest
 
-from shadow import reinit, get_killed, t_int, t_tuple, t_list, t_assert, t_cond
+from shadow import reinit, t_get_killed, t_int, t_tuple, t_list, t_assert, t_cond
 
 
 def gen_killed(strong, weak):
@@ -19,7 +19,7 @@ def test_reinit_t_assert():
         tainted_int = t_int({'0': 0, f'{ii}.1': 1})
 
         t_assert(tainted_int == 0)
-        assert get_killed() == gen_killed({f'{ii}.1': True}, {})
+        assert t_get_killed() == gen_killed({f'{ii}.1': True}, {})
 
 
 
@@ -40,11 +40,11 @@ def test_tuple_eq_with_tint_elem():
     data = t_tuple((1, 2, 3, tainted_int))
 
     t_assert(data == (1, 2, 3, 0))
-    assert get_killed() == gen_killed({'1.1': True}, {})
+    assert t_get_killed() == gen_killed({'1.1': True}, {})
 
     reinit()
     t_assert((1, 2, 3, 0) == data)
-    assert get_killed() == gen_killed({'1.1': True}, {})
+    assert t_get_killed() == gen_killed({'1.1': True}, {})
 
 
 
@@ -67,7 +67,7 @@ def test_list_eq_with_tint_elem():
     data = [1, 2, 3, tainted_int]
 
     t_assert(data == [1, 2, 3, 0])
-    assert get_killed()[0] == {'1.1': True}
+    assert t_get_killed()[0] == {'1.1': True}
 
 
 @pytest.mark.skip(reason="not implemented: list len dependent on tainted int")

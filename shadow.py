@@ -32,7 +32,7 @@ def reinit():
 reinit()
 
 
-def get_killed():
+def t_get_killed():
     global WEAKLY_KILLED
     global STRONGLY_KILLED
 
@@ -151,7 +151,25 @@ def t_aug_mult(mutation_counter, left, right):
 # tainted types
 
 
-def taint_primitive(val, ):
+def init_shadow(cls, ty, shadow):
+    logger.debug("init_shadow %s %s %s", cls, ty, shadow)
+    res = {}
+    mainline_shadow = shadow[MAINLINE]
+    if isinstance(mainline_shadow, cls):
+        res |= mainline_shadow._shadow
+    else:
+        res[MAINLINE] = mainline_shadow
+
+    for mut_id, val in shadow.items():
+        if mut_id == MAINLINE:
+            continue
+        assert type(val) == ty
+        res[mut_id] = val
+
+    return res
+
+
+def taint_primitive(val):
     if isinstance(val, bool):
         return t_bool({MAINLINE: val})
     elif isinstance(val, int):
@@ -241,16 +259,14 @@ class t_bool():
     __slots__ = ['_shadow']
 
     def __init__(self, shadow):
-        for val in shadow.values():
-            assert isinstance(val, bool)
-        self._shadow = shadow
+        self._shadow = init_shadow(type(self), bool, shadow)
 
     def __eq__(self, other):
-        vs = tainted_op(self, other, lambda x, y: x == y, {int, float})
+        vs = tainted_op(self, other, lambda x, y: x == y, {bool, int, float})
         return t_bool({**self._shadow, **vs})
 
     def __ne__(self, other):
-        vs = tainted_op(self, other, lambda x, y: x != y, {int, float})
+        vs = tainted_op(self, other, lambda x, y: x != y, {bool, int, float})
         return t_bool({**self._shadow, **vs})
 
     def __or__(self, other: int) -> int:
@@ -258,7 +274,7 @@ class t_bool():
         return t_bool({**self._shadow, **vs})
 
     def __ror__(self, other: int) -> int:
-        vs = tainted_op(self, other, lambda x, y: x | y, {int, float})
+        vs = tainted_op(self, other, lambda x, y: x | y, {bool, int, float})
         return t_bool({**self._shadow, **vs})
 
     def __and__(self, other: int) -> int:
@@ -266,7 +282,7 @@ class t_bool():
         return t_bool({**self._shadow, **vs})
 
     def __rand__(self, other: int) -> int:
-        vs = tainted_op(self, other, lambda x, y: x & y, {int, float})
+        vs = tainted_op(self, other, lambda x, y: x & y, {bool, int, float})
         return t_bool({**self._shadow, **vs})
 
     # def __str__(self):
@@ -281,9 +297,7 @@ class t_int():
     __slots__ = ['_shadow']
 
     def __init__(self, shadow):
-        for val in shadow.values():
-            assert isinstance(val, int)
-        self._shadow = shadow
+        self._shadow = init_shadow(type(self), int, shadow)
 
     def __int__(self):
         return self
@@ -347,9 +361,7 @@ class t_float():
     __slots__ = ['_shadow']
 
     def __init__(self, shadow):
-        for val in shadow.values():
-            assert isinstance(val, float)
-        self._shadow = shadow
+        self._shadow = init_shadow(type(self), float, shadow)
 
     def __radd__(self, other):
         return self.__add__(other)

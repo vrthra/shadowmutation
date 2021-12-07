@@ -5,6 +5,7 @@ from copy import deepcopy
 
 
 TAINT_MEMBERS = [
+    "t_get_killed",
     "t_cond",
     "t_assert",
     "t_context",
@@ -155,6 +156,7 @@ def load_and_mutate(path):
         tree = ast.parse(f.read())
     tree.body.insert(0, ast.parse(f'from shadow import {", ".join(TAINT_MEMBERS)}').body[0])
     tree = ast.fix_missing_locations(ShadowExecutionTransformer().visit(tree))
+    tree.body.append(ast.parse(f'print(t_get_killed())').body[0])
     return tree
 
 
