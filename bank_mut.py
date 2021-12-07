@@ -2,7 +2,7 @@ import shadow
 class BankAccount:
     def __init__(self, initial_balance):
         # the value indicated by '0' is the main line.
-        self.balance = shadow.tint({
+        self.balance = shadow.t_int({
             '0':  initial_balance, # mainline, no mutation
             '1.1': initial_balance + 1 # mutation +1
             })
@@ -12,10 +12,10 @@ class BankAccount:
             self.overdrawn = True
 
     def deposit(self, amount):
-        self.balance = shadow.tint({
+        self.balance = shadow.t_int({
             '0':self.balance + amount, # mainline -- no mutation
             '2.1':shadow.untaint(self.balance - amount), # mutation op +/-
-            }) + shadow.tint({
+            }) + shadow.t_int({
             '0':0, # main line -- no mutation
             '2.2':1, # mutation +1
             })
@@ -26,10 +26,10 @@ class BankAccount:
 
 
     def withdraw(self, amount):
-        self.balance = shadow.tint({
+        self.balance = shadow.t_int({
             '0':self.balance - amount, # mainline -- no mutation
             '3.1':shadow.untaint(self.balance + amount), # mutation op +/-
-            }) + shadow.tint({
+            }) + shadow.t_int({
             '0':0, # main line -- no mutation
             '3.2':1, # mutation +1
             })
@@ -39,7 +39,7 @@ class BankAccount:
             self.overdrawn = True
 
     def interest(self, i):
-        self.balance = shadow.tint({
+        self.balance = shadow.t_int({
             '0':(self.balance * i), # mainline -- no mutation
             '4.1':shadow.untaint(self.balance / i), # mutation op *//
             })
