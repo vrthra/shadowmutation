@@ -1,12 +1,13 @@
 import pytest
 
-from shadow import reinit, t_get_killed, t_int, t_tuple, t_list, t_assert, t_cond
+from shadow import reinit, wait_for_forks, t_get_killed, t_int, t_tuple, t_list, t_assert, t_cond
 
 
 def gen_killed(strong, weak):
     return {
-        'strong': strong,
-        'weak': weak,
+        'strong': set(strong),
+        'weak': set(weak),
+        'masked': set(),
     }
 
 
@@ -19,8 +20,64 @@ def test_reinit_t_assert():
         tainted_int = t_int({'0': 0, f'{ii}.1': 1})
 
         t_assert(tainted_int == 0)
-        assert t_get_killed() == gen_killed({f'{ii}.1': True}, {})
+        assert t_get_killed() == gen_killed({f'{ii}.1'}, {})
 
+
+def basic_split_stream_testcase():
+    tainted_int = t_int({'0': 0, '1.1': 1})
+    if t_cond(tainted_int == 0):
+        tainted_int += 1
+    else:
+        tainted_int -= 1
+
+    t_assert(tainted_int == 1)
+    wait_for_forks()
+
+
+def test_split_stream_single_if():
+    reinit()
+    basic_split_stream_testcase()
+    assert t_get_killed() == gen_killed(['1.1'], ['1.1'])
+
+
+def test_split_stream_disabled():
+    reinit(split_stream=False)
+    basic_split_stream_testcase()
+    assert t_get_killed() == gen_killed([], ['1.1'])
+
+
+def test_split_stream_alternate_path():
+    reinit(logical_path='1.1', split_stream=False)
+    basic_split_stream_testcase()
+    assert t_get_killed() == gen_killed(['1.1'], [])
+
+
+def test_split_stream_double_if():
+    reinit()
+    tainted_int = t_int({'0': 0, '1.1': 1, '1.2': 2, '1.3': 3})
+    if t_cond(tainted_int <= 1):
+        tainted_int += 1
+        # '0': 1, '1.1': 2
+        if t_cond(tainted_int == 1):
+            tainted_int -= 1
+            # '0': 0
+        else:
+            tainted_int += 1
+            # '1.1': 3
+    else:
+        tainted_int -= 1
+        # '1.2': 1, '1.3': 2
+        if t_cond(tainted_int == 1):
+            tainted_int -= 1
+            # '1.2': 0
+        else:
+            tainted_int += 1
+            # '1.3': 3
+
+    t_assert(tainted_int == 0)
+    wait_for_forks()
+    # note that 1.3 is only strongly killed due to a fork from a forked child
+    assert t_get_killed() == gen_killed(['1.1', '1.3'], ['1.1', '1.2', '1.3'])
 
 
 
@@ -33,7 +90,6 @@ def test_reinit_t_assert():
 # '__rmul__', '__setattr__', '__sizeof__', '__str__', '__subclasshook__',
 # 'count', 'index']
 
-# @pytest.mark.skip(reason="not implemented: need to hook equal of tuple")
 def test_tuple_eq_with_tint_elem():
     reinit()
     tainted_int = t_int({'0': 0, '1.1': 1})

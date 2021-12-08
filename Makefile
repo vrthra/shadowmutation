@@ -9,7 +9,9 @@ do-2.1: tmp
 	LOGICAL_PATH=2.1 python3 ./tmp/bank_mut.py
 
 test:
-	pytest --log-cli-level=INFO
+	pytest --log-cli-level=DEBUG --log-format="%(levelname)s %(process)d %(message)s"
+
+
 
 tmp:
 	mkdir tmp

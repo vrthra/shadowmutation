@@ -1,83 +1,272 @@
+from json.decoder import JSONDecodeError
 import os
 import sys
+import json
+from pathlib import Path
+from tempfile import mkdtemp, mkstemp
 from copy import deepcopy
 from functools import wraps, partial
 from contextlib import contextmanager
 
 import logging
-logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
+from typing import Union
+logging.basicConfig(stream=sys.stdout, level=logging.DEBUG, format='%(process)d %(message)s')
 logger = logging.getLogger(__name__)
 
 
 MAINLINE = '0'
 LOGICAL_PATH = '0'
-
-STRONGLY_KILLED = {}
-WEAKLY_KILLED = {}
+SPLIT_STREAM_EXECUTION = True
 
 
-def reinit():
+class SplitStreamForker():
+    def __init__(self):
+        self.is_parent = True
+        self.sync_dir = Path(mkdtemp())
+        (self.sync_dir/'paths').mkdir()
+        (self.sync_dir/'results').mkdir()
+
+    def my_pid(self):
+        return os.getpid()
+
+    def maybe_fork(self, path):
+        global LOGICAL_PATH
+
+        # # Don't fork if current process is a child process, all forks need to depart from mainline.
+        # if not self.is_parent:
+        #     return False
+
+        # Only fork once, from then on follow that path.
+        path_file = self.sync_dir.joinpath('paths', path)
+        if path_file.is_file():
+            return False
+        path_file.touch()
+
+        # Try to fork
+        forked_pid = os.fork()
+        logger.debug(f"Forking for path: {path} got pid: {forked_pid}")
+        if forked_pid == -1:
+            # Error during forking. Not much we can do.
+            raise ValueError(f"Could not fork for path: {path}!")
+        elif forked_pid != 0:
+            # We are in parent, record the child pid and path.
+            path_file.write_text(str(forked_pid))
+            return False
+        else:
+            # We are the child, update that this is the child.
+            self.is_parent = False
+
+            # Upodate which path child is supposed to follow
+            LOGICAL_PATH = path
+            return True
+
+    def wait_for_forks(self):
+        # if child, write results and exit
+        if not self.is_parent:
+            pid = self.my_pid()
+            path = LOGICAL_PATH
+            logger.debug(f"Child with pid: {pid} and path: {path} "
+                         f"has reached sync point.")
+            res_path = self.sync_dir/'results'/str(pid)
+            logger.debug(f"Writing results to: {res_path}")
+            with open(res_path, 'wt') as f:
+                results = t_get_killed()
+                for res in ['strong', 'weak', 'masked']:
+                    results[res] = list(results[res])
+                results['pid'] = pid
+                results['path'] = path
+                json.dump(results, f)
+
+            # exit the child immediately, this might cause problems for programs actually using multiprocessing
+            # but this is a prototype and this fixes problems with pytest
+            os._exit(0)
+
+        # wait for all child processes to end
+        all_results = t_get_killed()
+        while True:
+            is_done = True
+            for path_file in (self.sync_dir/'paths').glob("*"):
+                is_done = False
+                try:
+                    child_pid = int(path_file.read_text())
+                except ValueError:
+                    continue
+
+                logger.debug(f"Waiting for pid: {child_pid}")
+
+                try:
+                    os.waitpid(child_pid, 0)
+                except ChildProcessError as e:
+                    pass
+
+                result_file = self.sync_dir/'results'/str(child_pid)
+                if result_file.is_file():
+                    with open(result_file, 'rt') as f:
+                        try:
+                            child_results = json.load(f)
+                        except JSONDecodeError:
+                            # Child has not yet written the results.
+                            continue
+
+                    for res in ['strong', 'weak', 'masked']:
+                        child_results[res] = set(child_results[res])
+
+                    for res in ['strong', 'weak']:
+                        all_results[res] |= child_results[res] - child_results['masked']
+
+                    logger.debug(f"child results: {child_results}")
+
+                    path_file.unlink()
+                    result_file.unlink()
+            
+            if is_done:
+                break
+        logger.debug(f"Done waiting for forks.")
+
+        (self.sync_dir/'paths').rmdir()
+        (self.sync_dir/'results').rmdir()
+        self.sync_dir.rmdir()
+
+
+STRONGLY_KILLED = None
+WEAKLY_KILLED = None
+MASKED = None
+FORKING_CONTEXT: Union[None, SplitStreamForker] = None
+
+
+def reinit(logical_path: str=None, split_stream: bool=None):
     logger.info("Reinit global shadow state")
     # initializing shadow
     global LOGICAL_PATH
-    global WEAKLY_KILLED
     global STRONGLY_KILLED
+    global WEAKLY_KILLED
+    global MASKED
+    global SPLIT_STREAM_EXECUTION
+    global FORKING_CONTEXT
 
-    LOGICAL_PATH = os.environ.get('LOGICAL_PATH', '0')
-    WEAKLY_KILLED = {}
-    STRONGLY_KILLED = {}
+    if logical_path is not None:
+        LOGICAL_PATH = logical_path
+    else:
+        LOGICAL_PATH = os.environ.get('LOGICAL_PATH', MAINLINE)
+
+    if split_stream is not None:
+        SPLIT_STREAM_EXECUTION = split_stream
+    else:
+        SPLIT_STREAM_EXECUTION = os.environ.get('SPLIT_STREAM_EXECUTION', '1') == '1'
+
+    WEAKLY_KILLED = set()
+    STRONGLY_KILLED = set()
+    MASKED = set()
+
+    if SPLIT_STREAM_EXECUTION:
+        FORKING_CONTEXT = SplitStreamForker()
+    else:
+        FORKING_CONTEXT = None
 
 
 # Init when importing shadow
 reinit()
 
 
+def wait_for_forks():
+    global FORKING_CONTEXT
+    if FORKING_CONTEXT is not None:
+        FORKING_CONTEXT.wait_for_forks()
+
+
 def t_get_killed():
     global WEAKLY_KILLED
     global STRONGLY_KILLED
+    global MASKED
 
     return {
         'strong': STRONGLY_KILLED,
         'weak': WEAKLY_KILLED,
+        'masked': MASKED,
     }
 
 
 def t_cond(cond):
     global WEAKLY_KILLED
-    if hasattr(cond, '_shadow'):
-        vs = deepcopy(cond._shadow)
-        res = vs.get(LOGICAL_PATH, vs[MAINLINE])
-        logger.debug("t_cond: %s %s", vs, res)
+    global FORKING_CONTEXT
+    global MASKED
+
+    shadow = get_shadow(cond)
+
+    if shadow is not None:
+        logger.debug(f"shadow {shadow} {LOGICAL_PATH}")
+        res = shadow.get(LOGICAL_PATH, shadow.get(MAINLINE))
+        logger.debug("t_cond: (%s, %s) %s", LOGICAL_PATH, res, shadow)
+
         # mark all others weakly killed.
-        for k in vs:
-            if vs[k] != res:
-                logger.debug(f"t_cond WEAKLY_KILLED: {k}")
-                WEAKLY_KILLED[k] = True
+        forking_path = None
+        for path, path_val in shadow.items():
+            if path in WEAKLY_KILLED:
+                continue
+
+            if path != MAINLINE and path_val != res:
+                if SPLIT_STREAM_EXECUTION and forking_path is None:
+                    forking_path = (path, path_val)
+                logger.info(f"t_cond weakly_killed: {path}")
+                WEAKLY_KILLED.add(path)
+
+        if forking_path is not None:
+            logger.debug(f"fork path: {forking_path}")
+            fork_path, fork_val = forking_path
+            if FORKING_CONTEXT.maybe_fork(fork_path):
+                # in forked child
+                for path, path_val in shadow.items():
+                    if path_val == fork_val:
+                        WEAKLY_KILLED.discard(path)
+                    else:
+                        MASKED.add(path)
+                return t_cond(cond)
+        
         return res
     else:
         return cond
 
 
+def get_shadow(val):
+    if hasattr(val, '_shadow'):
+        shadow = val._shadow
+        logger.debug(f"{shadow}")
+        filtered_shadow = {
+            path: val for path, val in shadow.items()
+            if path not in STRONGLY_KILLED and path not in WEAKLY_KILLED and path not in MASKED
+        }
+
+        logger.debug(f"log_path: {LOGICAL_PATH}")
+        if LOGICAL_PATH not in shadow:
+            filtered_shadow[MAINLINE] = shadow[MAINLINE]
+        else:
+            filtered_shadow[LOGICAL_PATH] = shadow[LOGICAL_PATH]
+
+        return filtered_shadow
+
+    else:
+        return None
+
+
 def t_assert(bval):
     global STRONGLY_KILLED
     global WEAKLY_KILLED
-    if hasattr(bval, '_shadow'):
-        vs = bval._shadow
-        logger.info('STRONGLY_KILLED')
-        for k in sorted(vs):
-            if not vs[k]:
-                STRONGLY_KILLED[k] = True
-                logger.info("killed: %s %s", k, vs[k])
+    shadow = get_shadow(bval)
+    logger.debug(f"t_assert {bval} {shadow}")
+    if shadow is not None:
+        for path, val in shadow.items():
+            if path == MAINLINE:
+                continue
+            if not val:
+                STRONGLY_KILLED.add(path)
+                logger.info(f"t_assert strongly killed: {path}")
 
-        logger.info('WEAKLY_KILLED')
-        for k in WEAKLY_KILLED:
-            logger.info(k)
-
-        # Do the actual assertion as would be done in the unchanged program
-        assert vs['0']
+        # Do the actual assertion as would be done in the unchanged program but only for mainline execution
+        if LOGICAL_PATH == MAINLINE:
+            assert shadow[MAINLINE]
     else:
         if MAINLINE != LOGICAL_PATH:
-            STRONGLY_KILLED[LOGICAL_PATH] = True
+            STRONGLY_KILLED.add(LOGICAL_PATH)
             logger.info(f'STRONGLY_KILLED: {LOGICAL_PATH}')
         else:
             assert bval
@@ -98,13 +287,13 @@ def t_assign(mutation_counter, right):
 
     if isinstance(right, bool):
         return t_bool({
-            '0': right, # mainline, no mutation
+            MAINLINE: right, # mainline, no mutation
             f'{mutation_counter}.1': not right, # mutation +1
         })
 
     if isinstance(right, int):
         return t_int({
-            '0':  right, # mainline, no mutation
+            MAINLINE:  right, # mainline, no mutation
             f'{mutation_counter}.1': right + 1, # mutation +1
         })
 
@@ -114,10 +303,10 @@ def t_assign(mutation_counter, right):
 def t_aug_add(mutation_counter, left, right):
     if isinstance(left, (int, t_int)) and isinstance(right, (int, t_int)):
         return t_int({
-            '0': left + right, # mainline -- no mutation
+            MAINLINE: left + right, # mainline -- no mutation
             f'{mutation_counter}.1': untaint(left - right), # mutation op +/-
         }) + t_int({
-            '0':0, # main line -- no mutation
+            MAINLINE:0, # main line -- no mutation
             f'{mutation_counter}.2':1, # mutation +1
         })
     else:
@@ -127,10 +316,10 @@ def t_aug_add(mutation_counter, left, right):
 def t_aug_sub(mutation_counter, left, right):
     if isinstance(left, (int, t_int)) and isinstance(right, (int, t_int)):
         return t_int({
-            '0': left - right, # mainline -- no mutation
+            MAINLINE: left - right, # mainline -- no mutation
             f'{mutation_counter}.1': untaint(left + right), # mutation op +/-
         }) + t_int({
-            '0':0, # main line -- no mutation
+            MAINLINE:0, # main line -- no mutation
             f'{mutation_counter}.2':1, # mutation +1
         })
     else:
@@ -140,7 +329,7 @@ def t_aug_sub(mutation_counter, left, right):
 def t_aug_mult(mutation_counter, left, right):
     if isinstance(left, (int, t_int)) and isinstance(right, (int, t_int)):
         return t_int({
-            '0': left * right, # mainline -- no mutation
+            MAINLINE: left * right, # mainline -- no mutation
             f'{mutation_counter}.1': untaint(left / right), # mutation op *//
         })
     else:
@@ -152,7 +341,7 @@ def t_aug_mult(mutation_counter, left, right):
 
 
 def init_shadow(cls, ty, shadow):
-    logger.debug("init_shadow %s %s %s", cls, ty, shadow)
+    # logger.debug("init_shadow %s %s %s", cls, ty, shadow)
     res = {}
     mainline_shadow = shadow[MAINLINE]
     if isinstance(mainline_shadow, cls):
@@ -179,12 +368,10 @@ def taint_primitive(val):
 
 
 def tainted_op(first, other, op, primitive_kind):
-    logger.debug("tainted op: %s %s", first, other)
     vs = first._shadow
     if type(other) in primitive_kind:
         # now do the operation on all values.
         res = {k: op(vs[k], other) for k in vs}
-        logger.debug("primitive res: %s", res)
         return res
     elif hasattr(other, '_shadow'):
         vo = other._shadow
@@ -216,7 +403,7 @@ def maybe_tainted_op(first, other, op, primitive_kind):
         first = taint_primitive(first, primitive_kind)
         return tainted_op(first, other, op, primitive_kind)
     else:
-        return {'0': op(first, other)}
+        return {MAINLINE: op(first, other)}
 
 
 def losing_taint(self):
@@ -230,7 +417,7 @@ def proxy_function(cls, name, f):
     @wraps(f)
     def proxied_f(*args, **kwargs):
         res = f(*args, **kwargs)
-        logger.debug('%s %s: %s %s -> %s (%s)', cls, name, args, kwargs, res, type(res))
+        # logger.debug('%s %s: %s %s -> %s (%s)', cls, name, args, kwargs, res, type(res))
         return res
     return proxied_f
 
@@ -247,7 +434,7 @@ def taint(orig_class):
         ]:
              continue
         orig_func = getattr(orig_class, func)
-        logging.debug("%s %s", orig_class, func)
+        # logging.debug("%s %s", orig_class, func)
         setattr(orig_class, func, cls_proxy(func, orig_func))
 
 
@@ -423,7 +610,7 @@ class t_float():
 class t_tuple():
     def __init__(self, *args, **kwargs):
         self.val = tuple(*args, **kwargs)
-        self.len = t_int({'0': len(self.val)})
+        self.len = t_int({MAINLINE: len(self.val)})
 
     def __iter__(self):
         for elem in self.val:
