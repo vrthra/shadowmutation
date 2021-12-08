@@ -10,7 +10,7 @@ from contextlib import contextmanager
 
 import logging
 from typing import Union
-logging.basicConfig(stream=sys.stdout, level=logging.DEBUG, format='%(process)d %(message)s')
+logging.basicConfig(stream=sys.stdout, level=logging.WARN, format='%(process)d %(message)s')
 logger = logging.getLogger(__name__)
 
 
