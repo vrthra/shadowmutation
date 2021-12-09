@@ -1,6 +1,6 @@
 import pytest
 
-from shadow import reinit, wait_for_forks, t_get_killed, t_int, t_tuple, t_list, t_assert, t_cond
+from shadow import reinit, t_wait_for_forks, t_get_killed, t_int, t_tuple, t_list, t_assert, t_cond
 
 
 def gen_killed(strong, weak):
@@ -31,7 +31,7 @@ def basic_split_stream_testcase():
         tainted_int -= 1
 
     t_assert(tainted_int == 1)
-    wait_for_forks()
+    t_wait_for_forks()
 
 
 def test_split_stream_single_if():
@@ -75,7 +75,7 @@ def test_split_stream_double_if():
             # '1.3': 3
 
     t_assert(tainted_int == 0)
-    wait_for_forks()
+    t_wait_for_forks()
     # note that 1.3 is only strongly killed due to a fork from a forked child
     assert t_get_killed() == gen_killed(['1.1', '1.3'], ['1.1', '1.2', '1.3'])
 

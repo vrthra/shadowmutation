@@ -168,7 +168,7 @@ def reinit(logical_path: str=None, split_stream: bool=None):
 reinit()
 
 
-def wait_for_forks():
+def t_wait_for_forks():
     global FORKING_CONTEXT
     if FORKING_CONTEXT is not None:
         FORKING_CONTEXT.wait_for_forks()
@@ -278,9 +278,8 @@ def untaint(obj):
     return obj
 
 
-@contextmanager
-def t_context():
-    yield
+def t_combine(mutations):
+    return mutations[0]
 
 
 def t_assign(mutation_counter, right):
