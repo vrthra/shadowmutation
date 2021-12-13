@@ -4,15 +4,17 @@ import argparse
 import re
 import shutil
 import json
+from functools import partial
 from pathlib import Path
 from typing import Union
 from copy import deepcopy
 from mypy import api
+from multiprocessing import Pool
 
 
 TAINT_MEMBERS = [
     "t_combine",
-    "t_wait_for_forks",
+    "t_gather_results",
     "t_cond",
     "t_assert",
 ]
@@ -171,9 +173,9 @@ class ShadowExecutionTransformer(ast.NodeTransformer):
         for mutation in [
             "not right",
             "right + 1",
-            "right + asdf",
             "right * 2",
             "(not right) + 1",
+            "right << 2",
         ]:
             cur_mut_ctr = self.mutation_counter.get()
             mutation = ast.parse(mutation)
@@ -286,8 +288,8 @@ def generate_traditional_mutation(path, res_dir, function_ignore_regex, mut):
     mypy_result = api.run([str(res_path), "--strict"])
     if mypy_result[2] != 0:
         shutil.move(res_path, mypy_filtered_dir/res_path.name)
-        return False
-    return True
+        return mut, False
+    return mut, True
 
 
 def generate_split_stream(path, res_dir, function_ignore_regex, mutations):
@@ -298,7 +300,7 @@ def generate_split_stream(path, res_dir, function_ignore_regex, mutations):
     tree.body.insert(0, ast.parse(f'from shadow import {", ".join(TAINT_MEMBERS)}').body[0])
     tree = ast.fix_missing_locations(ShadowExecutionTransformer(mode, function_ignore_regex).visit(tree))
     tree = ast.fix_missing_locations(AssertTransformer().visit(tree))
-    tree.body.append(ast.parse(f't_wait_for_forks()').body[0])
+    tree.body.append(ast.parse(f't_gather_results()').body[0])
 
     res_path = res_dir/f"split_stream.py"
 
@@ -314,9 +316,9 @@ def generate_shadow(path, res_dir, function_ignore_regex, mutations):
     tree.body.insert(0, ast.parse(f'from shadow import {", ".join(TAINT_MEMBERS)}').body[0])
     tree = ast.fix_missing_locations(ShadowExecutionTransformer(mode, function_ignore_regex).visit(tree))
     tree = ast.fix_missing_locations(AssertTransformer().visit(tree))
-    tree.body.append(ast.parse(f't_wait_for_forks()').body[0])
+    tree.body.append(ast.parse(f't_gather_results()').body[0])
 
-    res_path = res_dir/f"shadow.py"
+    res_path = res_dir/f"shadow_execution.py"
 
     with open(res_path, "wt") as f:
         f.write(astor.to_source(tree))
@@ -331,29 +333,10 @@ def load_and_mutate(path, function_ignore_regex):
     return tree
 
 
-def load_cache(cache_path):
-    if cache_path is None:
-        return None
-
-    try:
-        with open(cache_path, "rt") as f:
-            return json.load(f)
-    except Exception:
-        return None
-
-
-def write_cache(cache_path, data):
-    if cache_path is None:
-        return
-
-    with open(cache_path, "wt") as f:
-        json.dump(data, f)
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--ignore', help="Regex to ignore matching function names.", default=None)
-    parser.add_argument('--cache', help="Mutation id cache, only use for development.", default=None)
+    parser.add_argument('--active', help="Specify a specific testing type to generate, else use all.", default=None)
     parser.add_argument('source', help="Path to source file to transform.")
     parser.add_argument('target', help="Path to output file.")
 
@@ -361,28 +344,26 @@ def main():
     result_dir = Path(args.target)
     result_dir.mkdir(parents=True)
 
-    cache = load_cache(args.cache)
+    print("Checking input file with mypy:")
+    mypy_result = api.run([str(args.source)])
+    print(mypy_result[0].strip())
+    if mypy_result[2] != 0:
+        raise ValueError("Source file does not pass type checking, fix first.")
 
-    if cache is None:
-        print("Checking input file with mypy:")
-        mypy_result = api.run([str(args.source)])
-        print(mypy_result[0].strip())
-        if mypy_result[2] != 0:
-            raise ValueError("Source file does not pass type checking, fix first.")
+    shutil.copy(args.source, result_dir/'original.py')
 
-        mutations = collect_mutations(args.source, args.ignore)
-        print(mutations)
+    mutations = collect_mutations(args.source, args.ignore)
+    print(f"There are {len(mutations)} possible mutations.")
 
+    filtered_mutations = []
 
-        filtered_mutations = []
-        for mut in mutations:
-            if generate_traditional_mutation(args.source, result_dir, args.ignore, mut):
+    generate_traditional_prepared = partial(generate_traditional_mutation, args.source, result_dir, args.ignore)
+    with Pool() as pool:
+        for mut, keep in pool.imap_unordered(generate_traditional_prepared, mutations):
+            if keep:
                 filtered_mutations.append(mut)
-        write_cache(args.cache, filtered_mutations)
-    else:
-        filtered_mutations = cache
         
-    print("Filtered mutations:", len(filtered_mutations), filtered_mutations)
+    print(f"Filtered mutations:", len(filtered_mutations), sorted(filtered_mutations))
 
     generate_split_stream(args.source, result_dir, args.ignore, filtered_mutations)
     generate_shadow(args.source, result_dir, args.ignore, filtered_mutations)

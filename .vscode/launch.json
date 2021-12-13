@@ -11,7 +11,8 @@
             "program": "${file}",
             "console": "integratedTerminal",
             "env": {
-                "PYTHONPATH": "."
+                "PYTHONPATH": ".",
+                "EXECUTION_MODE": "split"
             },
         }
     ]

@@ -1,13 +1,21 @@
 import pytest
 
-from shadow import reinit, t_wait_for_forks, t_get_killed, t_int, t_tuple, t_list, t_assert, t_cond
+from shadow import reinit, t_combine, t_wait_for_forks, t_get_killed, t_cond, t_assert, t_tuple
 
 
 def gen_killed(strong, weak):
     return {
         'strong': set(strong),
         'weak': set(weak),
-        'masked': set(),
+    }
+
+
+def get_killed():
+    t_wait_for_forks()
+    results = t_get_killed()
+    return {
+        'strong': set(results['strong']),
+        'weak': set(results['weak']),
     }
 
 
@@ -15,69 +23,69 @@ def gen_killed(strong, weak):
 # shadow tests
 
 def test_reinit_t_assert():
-    for ii in range(3):
-        reinit()
-        tainted_int = t_int({'0': 0, f'{ii}.1': 1})
+    for ii in range(1, 4):
+        reinit(execution_mode='shadow_fork')
+        tainted_int = t_combine({0: 0, ii: 1})
 
         t_assert(tainted_int == 0)
-        assert t_get_killed() == gen_killed({f'{ii}.1'}, {})
+        assert get_killed() == gen_killed({ii}, {})
 
 
 def basic_split_stream_testcase():
-    tainted_int = t_int({'0': 0, '1.1': 1})
+    tainted_int = t_combine({0: 0, 1: 1})
     if t_cond(tainted_int == 0):
         tainted_int += 1
     else:
         tainted_int -= 1
 
     t_assert(tainted_int == 1)
-    t_wait_for_forks()
+    t_get_killed()
 
 
 def test_split_stream_single_if():
-    reinit()
+    reinit(execution_mode='shadow_fork')
     basic_split_stream_testcase()
-    assert t_get_killed() == gen_killed(['1.1'], ['1.1'])
+    assert get_killed() == gen_killed([1], [1])
 
 
 def test_split_stream_disabled():
-    reinit(split_stream=False)
+    reinit(execution_mode='shadow')
     basic_split_stream_testcase()
-    assert t_get_killed() == gen_killed([], ['1.1'])
+    assert get_killed() == gen_killed([], [1])
 
 
 def test_split_stream_alternate_path():
-    reinit(logical_path='1.1', split_stream=False)
+    reinit(logical_path=1, execution_mode='shadow_fork')
     basic_split_stream_testcase()
-    assert t_get_killed() == gen_killed(['1.1'], [])
+    assert get_killed() == gen_killed([1], [])
 
 
 def test_split_stream_double_if():
-    reinit()
-    tainted_int = t_int({'0': 0, '1.1': 1, '1.2': 2, '1.3': 3})
+    reinit(execution_mode='shadow_fork')
+    tainted_int = t_combine({0: 0, 1: 1, 2: 2, 3: 3})
     if t_cond(tainted_int <= 1):
         tainted_int += 1
-        # '0': 1, '1.1': 2
+        # 0: 1, 1: 2
         if t_cond(tainted_int == 1):
             tainted_int -= 1
-            # '0': 0
+            # 0: 0
         else:
             tainted_int += 1
-            # '1.1': 3
+            # 1: 3
     else:
         tainted_int -= 1
-        # '1.2': 1, '1.3': 2
+        # 2: 1, 3: 2
         if t_cond(tainted_int == 1):
             tainted_int -= 1
-            # '1.2': 0
+            # 2: 0
         else:
             tainted_int += 1
-            # '1.3': 3
+            # 3: 3
 
     t_assert(tainted_int == 0)
-    t_wait_for_forks()
+    t_get_killed()
     # note that 1.3 is only strongly killed due to a fork from a forked child
-    assert t_get_killed() == gen_killed(['1.1', '1.3'], ['1.1', '1.2', '1.3'])
+    assert get_killed() == gen_killed([1, 3], [1, 2, 3])
 
 
 
@@ -90,17 +98,19 @@ def test_split_stream_double_if():
 # '__rmul__', '__setattr__', '__sizeof__', '__str__', '__subclasshook__',
 # 'count', 'index']
 
+
+@pytest.mark.skip(reason="not implemented: need to update t_tuple")
 def test_tuple_eq_with_tint_elem():
-    reinit()
-    tainted_int = t_int({'0': 0, '1.1': 1})
+    reinit(execution_mode='shadow_fork')
+    tainted_int = t_combine({0: 0, 1: 1})
     data = t_tuple((1, 2, 3, tainted_int))
 
     t_assert(data == (1, 2, 3, 0))
-    assert t_get_killed() == gen_killed({'1.1': True}, {})
+    assert get_killed() == gen_killed({1: True}, {})
 
-    reinit()
+    reinit(execution_mode='shadow_fork')
     t_assert((1, 2, 3, 0) == data)
-    assert t_get_killed() == gen_killed({'1.1': True}, {})
+    assert get_killed() == gen_killed({1: True}, {})
 
 
 
@@ -118,18 +128,18 @@ def test_tuple_eq_with_tint_elem():
 
 @pytest.mark.skip(reason="not implemented: need to hook equal of list")
 def test_list_eq_with_tint_elem():
-    reinit()
-    tainted_int = t_int({'0': 0, '1.1': 1})
+    reinit(execution_mode='shadow_fork')
+    tainted_int = t_combine({0: 0, 1: 1})
     data = [1, 2, 3, tainted_int]
 
     t_assert(data == [1, 2, 3, 0])
-    assert t_get_killed()[0] == {'1.1': True}
+    assert get_killed()[0] == {1: True}
 
 
 @pytest.mark.skip(reason="not implemented: list len dependent on tainted int")
 def test_list_mul_tint():
     data = []
-    tainted_int = t_int({'0': 0, '1.1': 1})
+    tainted_int = t_combine({0: 0, 1: 1})
 
     # create a list where the length is dependent on the tainted int
     new_data = [1]*tainted_int
@@ -147,7 +157,7 @@ def test_list_mul_tint():
 @pytest.mark.skip(reason="not implemented: similar problems for pop, remove, index")
 def test_list_insert_tint():
     data = [1, 2, 3]
-    tainted_int = t_int({'0': 0, '1.1': 1})
+    tainted_int = t_combine({0: 0, 1: 1})
 
     # insert data at pos defined by tainted int
     data.insert(tainted_int, 'a')
@@ -191,7 +201,7 @@ def test_list_insert_tint():
 @pytest.mark.skip(reason="not implemented: tint not hashable")
 def test_dict_key_tainted():
     data = {}
-    tainted_int = t_int({'0': 0, '1.1': 1})
+    tainted_int = t_combine({'0': 0, '1.1': 1})
 
     # tainted int is not hashable
     data[tainted_int] = 1
