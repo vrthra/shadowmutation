@@ -6,7 +6,7 @@ import shutil
 import json
 from functools import partial
 from pathlib import Path
-from typing import Union
+from typing import NamedTuple, Tuple, Union, Any
 from copy import deepcopy
 from mypy import api
 from multiprocessing import Pool
@@ -25,7 +25,16 @@ def adbg(node):
 
 
 def apply(transformer, node):
-    return ast.fix_missing_locations(transformer.visit(node))
+    if type(node) == list:
+        transformed = []
+        for nn in node:
+            res = transformer.visit(nn)
+            if type(res) == list:
+                res = res[0]
+            transformed.append(res)
+        return transformed
+    else:
+        return transformer.visit(node)
 
 
 class MutationCounter():
@@ -55,6 +64,12 @@ class MutContainer():
 
         return node.body[0].value
 
+
+class Variable():
+    def __init__(self, name, getter, setter):
+        self.name = name
+        self.getter = getter
+        self.setter = setter
 
 
 class CtxToLoadTransformer(ast.NodeTransformer):
@@ -131,6 +146,16 @@ class Mode():
         return self.mode == 'shadow'
 
 
+def set_attribute(name):
+    def assign(node, new):
+        setattr(node, name, new)
+    return assign
+
+
+def assign_comparator(node, new):
+    node.comparators[0] = new[0]
+
+
 class ShadowExecutionTransformer(ast.NodeTransformer):
     def __init__(self, mode: Mode, ignore_regex: Union[None, str]):
         super().__init__()
@@ -144,10 +169,41 @@ class ShadowExecutionTransformer(ast.NodeTransformer):
             self.ignore_regex = None
             # print(f"Mutating all functions as no ignore regex was given.")
 
-    def wrap_with(self, node, func_id):
+    def _wrap_with(self, node, func_id):
         scope_expr = ast.Call(func=ast.Name(id=func_id, ctx=ast.Load()), args=[], keywords=[])
         new_node = ast.With([scope_expr], body=[node])
         return new_node
+
+    def _apply_mutations(self, node, mut_accessor, mutations, variables):
+        old_node = deepcopy(node)
+        if self.mode.is_split_stream() or self.mode.is_shadow():
+            mut_container = MutContainer()
+            mut_container.add(0, node)
+
+        for mutation in mutations:
+            if mutation is None:
+                continue
+            cur_mut_ctr = self.mutation_counter.get()
+            mutation = ast.parse(mutation)
+            mutation = mut_accessor(mutation.body[0])
+            new_node = deepcopy(node)
+
+            for var in variables:
+                var.setter(mutation, apply(ReplaceNameTransformer(var.name, var.getter(new_node)), var.getter(mutation)))
+
+            if self.mode.is_traditional() and self.mode.mut_is_active(cur_mut_ctr):
+                node = mutation
+            elif (self.mode.is_split_stream() or self.mode.is_shadow()) and self.mode.mut_is_active(cur_mut_ctr):
+                mut_container.add(cur_mut_ctr, mutation)
+            self.mutations.append(cur_mut_ctr)
+
+        if self.mode.is_split_stream() or self.mode.is_shadow():
+            node = mut_container.finalize()
+
+        node = ast.copy_location(node, old_node)
+        # node = ast.fix_missing_locations(node)
+
+        return node
 
     def visit_FunctionDef(self, node):
         if self.ignore_regex is not None and self.ignore_regex.match(node.name):
@@ -175,7 +231,6 @@ class ShadowExecutionTransformer(ast.NodeTransformer):
             "right + 1",
             "right * 2",
             "(not right) + 1",
-            "right << 2",
         ]:
             cur_mut_ctr = self.mutation_counter.get()
             mutation = ast.parse(mutation)
@@ -191,6 +246,41 @@ class ShadowExecutionTransformer(ast.NodeTransformer):
             node.value = mut_container.finalize()
 
         return node
+
+    def visit_Compare(self, node):
+        node = self.generic_visit(node)
+
+        if len(node.ops) != 1 or len(node.comparators) != 1:
+            adbg(node)
+            raise NotImplementedError(f"Compare is sequence: {node}")
+
+        # # change the compare operator:
+        # #   left == right
+        # # to:
+        cmp_op = node.ops[0]
+        mutations = [
+            None if type(cmp_op) == ast.Eq    else "left == right",
+            None if type(cmp_op) == ast.NotEq else "left != right",
+            None if type(cmp_op) == ast.Lt    else "left <  right",
+            None if type(cmp_op) == ast.LtE   else "left <= right",
+            None if type(cmp_op) == ast.Gt    else "left >  right",
+            None if type(cmp_op) == ast.GtE   else "left >= right",
+            # None if type(cmp_op) == ast.Is    else "left is right",
+        ]
+        
+        variables = [
+            Variable("left", lambda x: x.left, set_attribute("left")),
+            Variable("right", lambda x: x.comparators, set_attribute("comparators")),
+        ]
+
+        node = self._apply_mutations(node, lambda x: x.value, mutations, variables)
+
+        return node
+
+    def visit_BinOp(self, node):
+        node = self.generic_visit(node)
+        return node
+        
 
     # def visit_AugAssign(self, node):
     #     node = self.generic_visit(node)
@@ -231,7 +321,6 @@ class ShadowExecutionTransformer(ast.NodeTransformer):
     def visit_If(self, node):
         node = self.generic_visit(node)
         if self.mode.is_shadow():
-            assert len(node.test.ops) == 1 and len(node.test.comparators) == 1
             wrapped_test = ast.Call(
                 func=ast.Name(id='t_cond', ctx=ast.Load()),
                 args=[node.test],
@@ -270,17 +359,21 @@ def collect_mutations(path, function_ignore_regex):
     return transformer.mutations
 
 
-def generate_traditional_mutation(path, res_dir, function_ignore_regex, mut):
+def generate_traditional_mutation(path, res_dir, function_ignore_regex, mut) -> Tuple[int, bool, Any]:
     # first collect all possible mutations
     mode = Mode("traditional", [mut])
     with open(path, "rt") as f:
         tree = ast.parse(f.read())
     tree = ast.fix_missing_locations(ShadowExecutionTransformer(mode, function_ignore_regex).visit(tree))
 
-    res_path = res_dir/f"traditional_{mut}.py"
+    try:
+        source = astor.to_source(tree)
+    except Exception as exc:
+        return mut, False, (1, exc, None)
 
+    res_path = res_dir/f"traditional_{mut}.py"
     with open(res_path, "wt") as f:
-        f.write(astor.to_source(tree))
+        f.write(source)
 
     mypy_filtered_dir = (res_dir/f"mypy_filtered")
     mypy_filtered_dir.mkdir(exist_ok=True)
@@ -288,8 +381,8 @@ def generate_traditional_mutation(path, res_dir, function_ignore_regex, mut):
     mypy_result = api.run([str(res_path), "--strict"])
     if mypy_result[2] != 0:
         shutil.move(res_path, mypy_filtered_dir/res_path.name)
-        return mut, False
-    return mut, True
+        return mut, False, mypy_result
+    return mut, True, mypy_result
 
 
 def generate_split_stream(path, res_dir, function_ignore_regex, mutations):
@@ -344,10 +437,10 @@ def main():
     result_dir = Path(args.target)
     result_dir.mkdir(parents=True)
 
-    print("Checking input file with mypy:")
+    # print("Checking input file with mypy:")
     mypy_result = api.run([str(args.source)])
-    print(mypy_result[0].strip())
     if mypy_result[2] != 0:
+        print(mypy_result[0].strip())
         raise ValueError("Source file does not pass type checking, fix first.")
 
     shutil.copy(args.source, result_dir/'original.py')
@@ -356,12 +449,21 @@ def main():
     print(f"There are {len(mutations)} possible mutations.")
 
     filtered_mutations = []
+    import sys
 
-    generate_traditional_prepared = partial(generate_traditional_mutation, args.source, result_dir, args.ignore)
-    with Pool() as pool:
-        for mut, keep in pool.imap_unordered(generate_traditional_prepared, mutations):
-            if keep:
-                filtered_mutations.append(mut)
+    # generate_traditional_prepared = partial(generate_traditional_mutation, args.source, result_dir, args.ignore)
+    # with Pool() as pool:
+    #     for mut, keep, mypy_result in pool.imap_unordered(generate_traditional_prepared, mutations):
+    for mut in mutations:
+        mut, keep, mypy_result = generate_traditional_mutation(args.source, result_dir, args.ignore, mut)
+        if keep:
+            # print(f"Keeping mutation: {mut}")
+            filtered_mutations.append(mut)
+        else:
+            # print(f"Not keeping mutation: {mut}")
+            # print(mypy_result[0])
+            pass
+        sys.stdout.flush()
         
     print(f"Filtered mutations:", len(filtered_mutations), sorted(filtered_mutations))
 

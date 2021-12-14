@@ -115,7 +115,7 @@ class Forker():
             logger.debug(f"Writing results to: {res_path}")
             with open(res_path, 'wt') as f:
                 results = t_get_killed()
-                for res in ['strong', 'weak', 'active']:
+                for res in ['strong', 'weak', 'active', 'masked']:
                     results[res] = list(results[res])
                 results['pid'] = pid
                 results['path'] = path
@@ -176,6 +176,7 @@ class Forker():
 STRONGLY_KILLED = None
 WEAKLY_KILLED = None
 ACTIVE_MUTANTS = None
+MASKED_MUTANTS = None
 EXECUTION_MODE = None
 RESULT_FILE = None
 FORKING_CONTEXT: Union[None, Forker] = None
@@ -188,6 +189,7 @@ def reinit(logical_path: str=None, execution_mode: Union[None, str]=None):
     global STRONGLY_KILLED
     global WEAKLY_KILLED
     global ACTIVE_MUTANTS
+    global MASKED_MUTANTS
     global EXECUTION_MODE
     global FORKING_CONTEXT
     global RESULT_FILE
@@ -197,7 +199,7 @@ def reinit(logical_path: str=None, execution_mode: Union[None, str]=None):
     if logical_path is not None:
         LOGICAL_PATH = logical_path
     else:
-        LOGICAL_PATH = os.environ.get('LOGICAL_PATH', MAINLINE)
+        LOGICAL_PATH = int(os.environ.get('LOGICAL_PATH', MAINLINE))
 
     if execution_mode is not None:
         EXECUTION_MODE = ExecutionMode.get_mode(execution_mode)
@@ -207,6 +209,7 @@ def reinit(logical_path: str=None, execution_mode: Union[None, str]=None):
     WEAKLY_KILLED = set()
     STRONGLY_KILLED = set()
     ACTIVE_MUTANTS = None
+    MASKED_MUTANTS = set()
 
     if EXECUTION_MODE.should_start_forker():
         logger.debug("Initializing forker")
@@ -226,14 +229,11 @@ def t_wait_for_forks():
 
 
 def t_get_killed():
-    global WEAKLY_KILLED
-    global STRONGLY_KILLED
-    global ACTIVE_MUTANTS
-
     return {
         'strong': STRONGLY_KILLED,
         'weak': WEAKLY_KILLED,
         'active': ACTIVE_MUTANTS,
+        'masked': MASKED_MUTANTS,
     }
 
 
@@ -256,38 +256,65 @@ def t_cond(cond):
     global WEAKLY_KILLED
     global FORKING_CONTEXT
     global ACTIVE_MUTANTS
+    global MASKED_MUTANTS
 
     shadow = get_active_shadow(cond)
 
     if shadow is not None:
         logger.debug(f"shadow {shadow} {LOGICAL_PATH}")
-        res = shadow.get(LOGICAL_PATH, shadow.get(MAINLINE))
+
+        logical_path_is_diverging = False
+
+        diverging_mutants = []
+        companion_mutants = []
+        
+
+        mainline_res = shadow[MAINLINE]
+        if LOGICAL_PATH in shadow:
+            res = shadow[LOGICAL_PATH]
+            assert type(res) == bool
+        else:
+            res = mainline_res
+
+        assert type(mainline_res) == bool
+
         logger.debug("t_cond: (%s, %s) %s", LOGICAL_PATH, res, shadow)
 
-        # mark all others weakly killed.
-        forking_path = None
         for path, path_val in shadow.items():
-            if path in WEAKLY_KILLED:
-                continue
+            if path_val != res:
+                if path == MAINLINE:
+                    logical_path_is_diverging = True
+                    continue
+                diverging_mutants.append(path)
+                if LOGICAL_PATH == MAINLINE:
+                    logger.info(f"t_cond weakly_killed: {path}")
+                    WEAKLY_KILLED.add(path)
+                if ACTIVE_MUTANTS is not None:
+                    ACTIVE_MUTANTS.discard(path)
+                MASKED_MUTANTS.add(path)
+            else:
+                companion_mutants.append(path)
 
-            if path != MAINLINE and path_val != res:
-                if EXECUTION_MODE and forking_path is None:
-                    forking_path = (path, path_val)
-                logger.info(f"t_cond weakly_killed: {path}")
-                WEAKLY_KILLED.add(path)
-
-        if FORKING_CONTEXT is not None and forking_path is not None:
-            logger.debug(f"fork path: {forking_path}")
-            fork_path, fork_val = forking_path
-            if FORKING_CONTEXT.maybe_fork(fork_path):
-                ACTIVE_MUTANTS = set()
-                # in forked child
-                for path, path_val in shadow.items():
-                    if path_val == fork_val:
-                        WEAKLY_KILLED.discard(path)
+        if FORKING_CONTEXT:
+            # Fork if enabled
+            if diverging_mutants:
+                logger.debug(f"diverging mutants: {diverging_mutants}")
+                path = diverging_mutants[0]
+                if FORKING_CONTEXT.maybe_fork(path):
+                    # this execution is in forked child
+                    MASKED_MUTANTS = set()
+                    ACTIVE_MUTANTS = set()
+                    for path in diverging_mutants:
                         ACTIVE_MUTANTS.add(path)
-                return t_cond(cond)
-        
+                    return t_cond(cond)
+        else:
+            # Follow the logical path, if that is not the same as mainline mark other mutations as inactive
+            if logical_path_is_diverging:
+                if ACTIVE_MUTANTS is None:
+                    ACTIVE_MUTANTS = set()
+                    for path in companion_mutants:
+                        ACTIVE_MUTANTS.add(path)
+
         return res
     else:
         return cond
@@ -297,16 +324,15 @@ def get_active(mutations):
     logger.debug(f"{mutations}")
     filtered_mutations = {
         path: val for path, val in mutations.items()
-        if path not in STRONGLY_KILLED and path not in WEAKLY_KILLED
+        if path not in STRONGLY_KILLED and path not in WEAKLY_KILLED and path not in MASKED_MUTANTS
     }
 
     if ACTIVE_MUTANTS is not None:
         filtered_mutations = { path: val for path, val in mutations.items() if path in ACTIVE_MUTANTS }
 
     logger.debug(f"log_path: {LOGICAL_PATH}")
-    if LOGICAL_PATH not in mutations:
-        filtered_mutations[MAINLINE] = mutations[MAINLINE]
-    else:
+    filtered_mutations[MAINLINE] = mutations[MAINLINE]
+    if LOGICAL_PATH in mutations:
         filtered_mutations[LOGICAL_PATH] = mutations[LOGICAL_PATH]
 
     return filtered_mutations
@@ -333,11 +359,21 @@ def shadow_assert(cmp_result):
                 STRONGLY_KILLED.add(path)
                 logger.info(f"t_assert strongly killed: {path}")
 
+        if ACTIVE_MUTANTS is not None and not shadow[MAINLINE]:
+            assert LOGICAL_PATH in ACTIVE_MUTANTS
+            for mut in ACTIVE_MUTANTS:
+                if mut not in shadow:
+                    STRONGLY_KILLED.add(mut)
+                    logger.info(f"t_assert strongly killed: {path}")
+
         # Do the actual assertion as would be done in the unchanged program but only for mainline execution
         if LOGICAL_PATH == MAINLINE:
             assert shadow[MAINLINE]
     else:
-        raise NotImplementedError("Shadow assert without taint information: {bval}")
+        if not cmp_result:
+            for mut in ACTIVE_MUTANTS:
+                STRONGLY_KILLED.add(mut)
+                logger.info(f"t_assert strongly killed: {mut}")
 
 
 def split_assert(cmp_result):
@@ -346,8 +382,9 @@ def split_assert(cmp_result):
     if cmp_result:
         return
     else:
-        STRONGLY_KILLED.add(LOGICAL_PATH)
-        logger.info(f"t_assert strongly killed: {LOGICAL_PATH}")
+        for mut in ACTIVE_MUTANTS:
+            STRONGLY_KILLED.add(mut)
+            logger.info(f"t_assert strongly killed: {mut}")
 
 
 def t_assert(cmp_result):
@@ -382,6 +419,14 @@ def combine_split_stream(mutations):
 
 def combine_modulo_eqv(mutations):
     global ACTIVE_MUTANTS
+    global MASKED_MUTANTS
+
+    mutations = get_active(mutations)
+
+    log_res = mutations[MAINLINE]
+    if LOGICAL_PATH in mutations:
+        log_res = mutations[LOGICAL_PATH]
+
     if LOGICAL_PATH == MAINLINE:
         combined = defaultdict(list)
         for mut_id, val in mutations.items():
@@ -389,11 +434,18 @@ def combine_modulo_eqv(mutations):
                 continue
             combined[val].append(mut_id)
 
-        for mut_ids in combined.values():
-            main_mut_id = mut_ids[0]
-            if FORKING_CONTEXT.maybe_fork(main_mut_id):
-                ACTIVE_MUTANTS = set(mut_ids)
-                return val
+        for val, mut_ids in combined.items():
+            if val != log_res:
+                main_mut_id = mut_ids[0]
+                if ACTIVE_MUTANTS is not None:
+                    ACTIVE_MUTANTS -= set(mut_ids)
+                MASKED_MUTANTS |= set(mut_ids)
+                if FORKING_CONTEXT.maybe_fork(main_mut_id):
+                    MASKED_MUTANTS = set()
+                    ACTIVE_MUTANTS = set(mut_ids)
+                    if 2 in mut_ids:
+                        print("hi")
+                    return val
     try:
         return mutations[LOGICAL_PATH]
     except KeyError:
@@ -468,7 +520,18 @@ class ShadowVariable():
         """.strip())
 
     def __init__(self, values):
-        self._shadow = values
+        combined = {}
+        for mut_id, val in values.items():
+            if type(val) == ShadowVariable:
+                val = val._shadow
+                if mut_id in val:
+                    combined[mut_id] = val[mut_id]
+                else:
+                    combined[mut_id] = val[MAINLINE]
+            else:
+                combined[mut_id] = val
+
+        self._shadow = combined
 
     # def __getattribute__(self, name: str):
     #     if name in ["_shadow", "_do_op"]:
@@ -493,7 +556,7 @@ class ShadowVariable():
 
             # if there was a preexisint taint of the same name, this mutation was
             # already executed. So, use that value.
-            cs_ = { k: self_shadow[k].__getattribute(op)(other_shadow[k]) for k in common_shadows}
+            cs_ = { k: self_shadow[k].__getattribute__(op)(other_shadow[k]) for k in common_shadows}
             #assert vs[MAINLINE] == os[MAINLINE]
             res = {**vs_, **vo_, **cs_}
             logger.debug("res: %s", res)

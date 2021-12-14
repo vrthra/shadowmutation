@@ -2,12 +2,17 @@
 
 export PYTHONPATH := $(shell pwd):$(PYTHONPATH)
 
-all: | test bank
+all: | test bank prime
 
 bank: tmp
 	rm -r tmp/bank || true
 	python3 ./ast_mutator.py --ignore "^test_" examples/bank.py tmp/bank
 	python execute_versions.py tmp/bank
+
+prime: tmp
+	rm -r tmp/prime || true
+	python3 ./ast_mutator.py --ignore "^test_" examples/prime.py tmp/prime
+	python execute_versions.py tmp/prime
 
 dev:
 	EXECUTION_MODE=split python3 tmp/bank/split_stream.py
