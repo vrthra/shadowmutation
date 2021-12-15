@@ -1,6 +1,6 @@
 import pytest
 
-from shadow import reinit, t_combine, t_wait_for_forks, t_get_killed, t_cond, t_assert, t_tuple
+from shadow import reinit, t_wrap, t_combine, t_wait_for_forks, t_get_killed, t_cond, t_assert, t_tuple
 
 
 def gen_killed(strong, weak):
@@ -24,69 +24,117 @@ def get_killed():
 
 def test_reinit_t_assert():
     for ii in range(1, 4):
-        reinit(execution_mode='shadow_fork')
+        reinit(execution_mode='shadow')
         tainted_int = t_combine({0: 0, ii: 1})
 
         t_assert(tainted_int == 0)
         assert get_killed() == gen_killed({ii}, {})
 
 
-def basic_split_stream_testcase():
-    tainted_int = t_combine({0: 0, 1: 1})
-    if t_cond(tainted_int == 0):
-        tainted_int += 1
-    else:
-        tainted_int -= 1
-
-    t_assert(tainted_int == 1)
-    t_get_killed()
-
-
 def test_split_stream_single_if():
-    reinit(execution_mode='shadow_fork')
-    basic_split_stream_testcase()
+    reinit(execution_mode='shadow')
+    @t_wrap
+    def func(tainted_int):
+        if t_cond(tainted_int == 0):
+            tainted_int += 1
+        else:
+            tainted_int -= 1
+        return tainted_int
+
+    
+    t_assert(func(t_combine({0: 0, 1: 1})) == 1)
     assert get_killed() == gen_killed([1], [1])
 
 
-def test_split_stream_disabled():
-    reinit(execution_mode='shadow')
-    basic_split_stream_testcase()
-    assert get_killed() == gen_killed([], [1])
-
-
-def test_split_stream_alternate_path():
-    reinit(logical_path=1, execution_mode='shadow_fork')
-    basic_split_stream_testcase()
-    assert get_killed() == gen_killed([1], [])
-
-
 def test_split_stream_double_if():
-    reinit(execution_mode='shadow_fork')
-    tainted_int = t_combine({0: 0, 1: 1, 2: 2, 3: 3})
-    if t_cond(tainted_int <= 1):
-        tainted_int += 1
-        # 0: 1, 1: 2
-        if t_cond(tainted_int == 1):
-            tainted_int -= 1
-            # 0: 0
-        else:
+    reinit(execution_mode='shadow')
+    @t_wrap
+    def func(tainted_int):
+        if t_cond(tainted_int <= 1):
             tainted_int += 1
-            # 1: 3
-    else:
-        tainted_int -= 1
-        # 2: 1, 3: 2
-        if t_cond(tainted_int == 1):
-            tainted_int -= 1
-            # 2: 0
+            # 0: 1, 1: 2
+            if t_cond(tainted_int == 1):
+                tainted_int -= 1
+                # 0: 0
+            else:
+                tainted_int += 1
+                # 1: 3
         else:
-            tainted_int += 1
-            # 3: 3
+            tainted_int -= 1
+            # 2: 1, 3: 2
+            if t_cond(tainted_int == 1):
+                tainted_int -= 1
+                # 2: 0
+            else:
+                tainted_int += 1
+                # 3: 3
+        return tainted_int
 
-    t_assert(tainted_int == 0)
+    t_assert(func(t_combine({0: 0, 1: 1, 2: 2, 3: 3})) == 0)
     t_get_killed()
-    # note that 1.3 is only strongly killed due to a fork from a forked child
     assert get_killed() == gen_killed([1, 3], [1, 2, 3])
 
+
+def test_split_stream_nested_if_call():
+    reinit(execution_mode='shadow')
+    @t_wrap
+    def inner(tainted_int):
+        if t_cond(tainted_int == 1):
+            tainted_int -= 1
+        else:
+            tainted_int += 1
+        return tainted_int
+
+    @t_wrap
+    def func(tainted_int):
+        if t_cond(tainted_int <= 1):
+            tainted_int += 1
+            tainted_int = inner(tainted_int)
+        else:
+            tainted_int -= 1
+            tainted_int = inner(tainted_int)
+        return tainted_int
+
+    t_assert(func(t_combine({0: 0, 1: 1, 2: 2, 3: 3})) == 0)
+    t_get_killed()
+    assert get_killed() == gen_killed([1, 3], [1, 2, 3])
+
+
+def test_wrap():
+    @t_wrap
+    def simple(a, b):
+        if t_cond(a == 1):
+            return b + 1
+        elif t_cond(t_combine({0: a == 2, 10: a >= 2})):
+            return a + b
+        else:
+            return 0
+
+    assert simple(0, 1) == 0
+
+    reinit(execution_mode='shadow')
+    t_assert(simple(t_combine({0: 0, 1: 1}), 1) == 0)
+    assert get_killed() == gen_killed([1], [1])
+
+    reinit(execution_mode='shadow')
+    t_assert(simple(1, t_combine({0: 0, 1: 1})) == 1)
+    assert get_killed() == gen_killed([1], [])
+
+    reinit(execution_mode='shadow')
+    t_assert(simple(t_combine({0: 0, 1: 1}), t_combine({0: 0, 2: 1})) == 0)
+    assert get_killed() == gen_killed([1], [1])
+
+    reinit(execution_mode='shadow')
+    t_assert(simple(2, t_combine({0: 1, 1: 2})) == 3)
+    assert get_killed() == gen_killed([1], [])
+
+    reinit(execution_mode='shadow')
+    t_assert(simple(3, 1) == 0)
+    assert get_killed() == gen_killed([10], [10])
+
+    reinit(execution_mode='shadow')
+    t_assert(simple(t_combine({0: 3, 1: 1}), 1) == 0)
+    assert get_killed() == gen_killed([1, 10], [1, 10])
 
 
 #################################################
@@ -101,14 +149,14 @@ def test_split_stream_double_if():
 
 @pytest.mark.skip(reason="not implemented: need to update t_tuple")
 def test_tuple_eq_with_tint_elem():
-    reinit(execution_mode='shadow_fork')
+    reinit(execution_mode='shadow')
     tainted_int = t_combine({0: 0, 1: 1})
     data = t_tuple((1, 2, 3, tainted_int))
 
     t_assert(data == (1, 2, 3, 0))
     assert get_killed() == gen_killed({1: True}, {})
 
-    reinit(execution_mode='shadow_fork')
+    reinit(execution_mode='shadow')
     t_assert((1, 2, 3, 0) == data)
     assert get_killed() == gen_killed({1: True}, {})
 
@@ -128,7 +176,7 @@ def test_tuple_eq_with_tint_elem():
 
 @pytest.mark.skip(reason="not implemented: need to hook equal of list")
 def test_list_eq_with_tint_elem():
-    reinit(execution_mode='shadow_fork')
+    reinit(execution_mode='shadow')
     tainted_int = t_combine({0: 0, 1: 1})
     data = [1, 2, 3, tainted_int]
 

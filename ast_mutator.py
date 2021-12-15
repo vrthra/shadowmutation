@@ -13,6 +13,7 @@ from multiprocessing import Pool
 
 
 TAINT_MEMBERS = [
+    "t_wrap",
     "t_combine",
     "t_gather_results",
     "t_cond",
@@ -212,6 +213,14 @@ class ShadowExecutionTransformer(ast.NodeTransformer):
         else:
             # print(f"Mutating:       {node.name}")
             node = self.generic_visit(node)
+            if self.mode.is_shadow():
+                mutation = ast.parse("""
+@t_wrap
+def f():
+    pass
+                """).body[0]
+                
+                node.decorator_list.append(mutation.decorator_list[0])
             return node
 
     def visit_Assert(self, node):
@@ -227,7 +236,7 @@ class ShadowExecutionTransformer(ast.NodeTransformer):
             mut_container.add(0, node.value)
 
         for mutation in [
-            "not right",
+            "right != 1",
             "right + 1",
             "right * 2",
             "(not right) + 1",

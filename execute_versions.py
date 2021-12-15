@@ -73,8 +73,7 @@ def main():
 
     split_stream_results = get_res(Path(args.dir)/"split_stream.py",     'split')
     modulo_results =       get_res(Path(args.dir)/"split_stream.py",     'modulo')
-    shadow_results =       shadow_res(Path(args.dir)/"shadow_execution.py", mut_ids)
-    shadow_fork_results =  get_res(Path(args.dir)/"shadow_execution.py", 'shadow_fork')
+    shadow_results =       get_res(Path(args.dir)/"shadow_execution.py", 'shadow')
 
     def get_sorted(data, key):
         return sorted(data[key])
@@ -86,12 +85,10 @@ def main():
     split_stream_killed = get_sorted(split_stream_results, 'strong')
     modulo_killed = get_sorted(modulo_results, 'strong')
     shadow_killed = get_sorted(shadow_results, 'strong')
-    shadow_fork_killed = get_sorted(shadow_fork_results, 'strong')
 
     split_stream_mode = get_mode(split_stream_results)
     modulo_mode = get_mode(modulo_results)
     shadow_mode = get_mode(shadow_results)
-    shadow_fork_mode = get_mode(shadow_fork_results)
 
     print("Traditional results: {traditional_results}")
     print("Comparing results:")
@@ -99,17 +96,14 @@ def main():
     print(split_stream_killed, split_stream_mode)
     print(modulo_killed, modulo_mode)
     print(shadow_killed, shadow_mode)
-    print(shadow_fork_killed, shadow_fork_mode)
 
     assert trad_killed == split_stream_killed
     assert trad_killed == modulo_killed
     assert trad_killed == shadow_killed
-    assert trad_killed == shadow_fork_killed
 
     assert split_stream_mode == "SPLIT_STREAM"
     assert modulo_mode == "MODULO_EQV"
     assert shadow_mode == "SHADOW"
-    assert shadow_fork_mode == "SHADOW_FORK"
 
 
 

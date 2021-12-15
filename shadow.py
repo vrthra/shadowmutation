@@ -8,6 +8,7 @@ from pathlib import Path
 from tempfile import mkdtemp, mkstemp
 from copy import deepcopy
 from functools import wraps, partial
+from itertools import chain
 from contextlib import contextmanager
 
 import logging
@@ -30,7 +31,6 @@ class ExecutionMode(Enum):
     SPLIT_STREAM = 1 # split stream execution
     MODULO_EQV = 2 # split stream + modulo equivalence pruning execution
     SHADOW = 3 # shadow types and no forking
-    SHADOW_FORK = 4 # shadow types + forking
 
     def get_mode(mode):
         if mode is None:
@@ -41,13 +41,11 @@ class ExecutionMode(Enum):
             return ExecutionMode.MODULO_EQV
         elif mode == 'shadow':
             return ExecutionMode.SHADOW
-        elif mode == 'shadow_fork':
-            return ExecutionMode.SHADOW_FORK
         else:
             raise ValueError("Unknown Execution Mode", mode)
 
     def should_start_forker(self):
-        if self in [ExecutionMode.SPLIT_STREAM, ExecutionMode.MODULO_EQV, ExecutionMode.SHADOW_FORK]:
+        if self in [ExecutionMode.SPLIT_STREAM, ExecutionMode.MODULO_EQV]:
             return True
         else:
             return False
@@ -252,6 +250,104 @@ def t_get_logical_path():
     return LOGICAL_PATH
 
 
+def t_wrap(f):
+    @wraps(f)
+    def flow_wrapper(*args, **kwargs):
+        global LOGICAL_PATH
+        global ACTIVE_MUTANTS
+        global MASKED_MUTANTS
+        logger.debug(f"CALL {f.__name__}({args} {kwargs})")
+        before_active = deepcopy(ACTIVE_MUTANTS)
+        before_masked = deepcopy(MASKED_MUTANTS)
+
+        remaining_paths = set([0])
+        done_paths = set()
+
+        for arg in chain(args, kwargs.values()):
+            if type(arg) == ShadowVariable:
+                remaining_paths |= arg._get_paths()
+        remaining_paths -= before_masked
+
+        tainted_return = {}
+        while remaining_paths:
+            LOGICAL_PATH = remaining_paths.pop()
+            logger.debug(f"cur path: {LOGICAL_PATH} remaining: {remaining_paths}")
+            ACTIVE_MUTANTS = deepcopy(before_active)
+            MASKED_MUTANTS = deepcopy(before_masked)
+            res = f(*args, **kwargs)
+            after_active = deepcopy(ACTIVE_MUTANTS)
+            after_masked = deepcopy(MASKED_MUTANTS)
+            logger.debug('wrapped: %s(%s %s) -> %s (%s)', f.__name__, args, kwargs, res, type(res))
+            new_active = (after_active or set()) - (before_active or set())
+            new_masked = after_masked - before_masked
+            
+            logger.debug("masked: %s %s %s", before_masked, after_masked, new_masked)
+            logger.debug("active: %s %s %s", before_active, after_active, new_active)
+            if type(res) != ShadowVariable:
+                assert LOGICAL_PATH not in tainted_return, f"{LOGICAL_PATH} {tainted_return}"
+                tainted_return[LOGICAL_PATH] = res
+
+                if new_active:
+                    assert LOGICAL_PATH in new_active
+
+                    for path in after_active or set():
+                        # already recorded the LOGICAL_PATH result before the loop
+                        if path == LOGICAL_PATH:
+                            continue
+                        assert path not in tainted_return, f"{path} {tainted_return}"
+                        tainted_return[path] = res
+            elif type(res) == ShadowVariable:
+                shadow = get_active(res._shadow)
+                unused_active = new_active
+
+                if LOGICAL_PATH in shadow:
+                    unused_active.discard(LOGICAL_PATH)
+                    log_res = shadow[LOGICAL_PATH]
+                else:
+                    log_res = shadow[MAINLINE]
+
+                if LOGICAL_PATH in tainted_return:
+                    assert tainted_return[LOGICAL_PATH] == log_res
+                else:
+                    tainted_return[LOGICAL_PATH] = log_res
+
+                for path, val in shadow.items():
+                    if path == MAINLINE or path == LOGICAL_PATH or path in new_masked:
+                        continue
+                    if path in tainted_return:
+                        assert tainted_return[path] == val
+                    else:
+                        tainted_return[path] = val
+                    unused_active.discard(path)
+                    done_paths.add(path)
+                
+                for path in unused_active:
+                    tainted_return[path] = shadow[MAINLINE]
+                    done_paths.add(path)
+
+            # logger.debug(f"cur return {tainted_return}")
+
+            done_paths |= new_active
+            done_paths.add(LOGICAL_PATH)
+            remaining_paths |= new_masked
+            remaining_paths -= done_paths
+
+        LOGICAL_PATH = MAINLINE
+        ACTIVE_MUTANTS = before_active
+        MASKED_MUTANTS = before_masked
+
+        logger.debug("return: %s", tainted_return)
+
+        # If only mainline in return value untaint it
+        if len(tainted_return) == 1:
+            assert MAINLINE in tainted_return
+            return tainted_return[MAINLINE]
+
+        return t_combine(tainted_return)
+
+    return flow_wrapper
+
+
 def t_cond(cond):
     global WEAKLY_KILLED
     global FORKING_CONTEXT
@@ -261,7 +357,7 @@ def t_cond(cond):
     shadow = get_active_shadow(cond)
 
     if shadow is not None:
-        logger.debug(f"shadow {shadow} {LOGICAL_PATH}")
+        # logger.debug(f"shadow {shadow} {LOGICAL_PATH}")
 
         logical_path_is_diverging = False
 
@@ -321,16 +417,16 @@ def t_cond(cond):
 
 
 def get_active(mutations):
-    logger.debug(f"{mutations}")
     filtered_mutations = {
         path: val for path, val in mutations.items()
-        if path not in STRONGLY_KILLED and path not in WEAKLY_KILLED and path not in MASKED_MUTANTS
+        if path not in MASKED_MUTANTS
+        # path not in STRONGLY_KILLED and path not in WEAKLY_KILLED and 
     }
 
     if ACTIVE_MUTANTS is not None:
         filtered_mutations = { path: val for path, val in mutations.items() if path in ACTIVE_MUTANTS }
 
-    logger.debug(f"log_path: {LOGICAL_PATH}")
+    # logger.debug(f"log_path: {LOGICAL_PATH}")
     filtered_mutations[MAINLINE] = mutations[MAINLINE]
     if LOGICAL_PATH in mutations:
         filtered_mutations[LOGICAL_PATH] = mutations[LOGICAL_PATH]
@@ -371,9 +467,12 @@ def shadow_assert(cmp_result):
             assert shadow[MAINLINE]
     else:
         if not cmp_result:
-            for mut in ACTIVE_MUTANTS:
-                STRONGLY_KILLED.add(mut)
-                logger.info(f"t_assert strongly killed: {mut}")
+            if ACTIVE_MUTANTS is not None:
+                for mut in ACTIVE_MUTANTS:
+                    STRONGLY_KILLED.add(mut)
+                    logger.info(f"t_assert strongly killed: {mut}")
+            else:
+                assert cmp_result
 
 
 def split_assert(cmp_result):
@@ -388,7 +487,7 @@ def split_assert(cmp_result):
 
 
 def t_assert(cmp_result):
-    if EXECUTION_MODE in [ExecutionMode.SHADOW, ExecutionMode.SHADOW_FORK]:
+    if EXECUTION_MODE in [ExecutionMode.SHADOW]:
         shadow_assert(cmp_result)
     elif EXECUTION_MODE in [ExecutionMode.SPLIT_STREAM, ExecutionMode.MODULO_EQV]:
         split_assert(cmp_result)
@@ -473,13 +572,17 @@ def t_combine(mutations):
 #         self._shadow = shadow
 #         self._thing = thing
 
-LIST_OF_ALLOWED_DUNDER_METHODS = [
+ALLOWED_DUNDER_METHODS = [
     '__abs__', '__add__', '__and__', '__div__', '__divmod__', '__eq__', 
     '__ne__', '__le__', '__len__', 
     '__ge__', '__gt__', '__sub__', '__lt__',
 ]
 
-LIST_OF_DISALLOWED_DUNDER_METHODS = [
+REDIRECTED_DUNDER_METHODS = [
+    ('__radd__', '__add__')
+]
+
+DISALLOWED_DUNDER_METHODS = [
     '__aenter__', '__aexit__', '__aiter__', '__anext__', '__await__',
     '__bool__', '__bytes__', '__call__', '__class__', '__cmp__', '__complex__', '__contains__',
     '__delattr__', '__delete__', '__delitem__', '__delslice__', '__dir__', 
@@ -489,7 +592,7 @@ LIST_OF_DISALLOWED_DUNDER_METHODS = [
     '__int__', '__invert__',
     '__ior__', '__iter__', '__ixor__', '__lshift__', 
     '__mod__', '__mul__', '__neg__', '__next__', '__nonzero__',
-    '__or__', '__pos__', '__pow__', '__prepare__', '__radd__', '__rand__', '__rdiv__',
+    '__or__', '__pos__', '__pow__', '__prepare__', '__rand__', '__rdiv__',
     '__rdivmod__', '__reduce__', '__reduce_ex__', '__repr__', '__reversed__', '__rfloordiv__',
     '__rlshift__', '__rmod__', '__rmul__', '__ror__', '__round__', '__rpow__', '__rrshift__',
     '__rshift__', '__rsub__', '__rtruediv__', '__rxor__', '__set__', '__setitem__',
@@ -506,14 +609,22 @@ LIST_OF_IGNORED_DUNDER_METHODS = [
 class ShadowVariable():
     __slots__ = ['_shadow']
 
-    for method in LIST_OF_ALLOWED_DUNDER_METHODS:
+    for method in ALLOWED_DUNDER_METHODS:
         exec(f"""
     def {method}(self, other, *args, **kwargs):
         assert len(args) == 0 and len(kwargs) == 0
         return self._do_op(other, "{method}")
         """.strip())
 
-    for method in LIST_OF_DISALLOWED_DUNDER_METHODS:
+    for from_method, to_method in REDIRECTED_DUNDER_METHODS:
+        exec(f"""
+    def {from_method}(self, other, *args, **kwargs):
+        assert len(args) == 0 and len(kwargs) == 0
+        logger.debug(f"redirected {from_method} to {to_method}")
+        return self._do_op(other, "{to_method}")
+        """.strip())
+
+    for method in DISALLOWED_DUNDER_METHODS:
         exec(f"""
     def {method}(self, *args, **kwargs):
         raise ValueError("dunder method {method} is not allowed")
@@ -524,14 +635,22 @@ class ShadowVariable():
         for mut_id, val in values.items():
             if type(val) == ShadowVariable:
                 val = val._shadow
-                if mut_id in val:
-                    combined[mut_id] = val[mut_id]
+                if mut_id == MAINLINE:
+                    for inner_mut_id, inner_val in val.items():
+                        assert inner_mut_id not in combined
+                        combined[inner_mut_id] = inner_val
                 else:
-                    combined[mut_id] = val[MAINLINE]
+                    if mut_id in val:
+                        assert mut_id not in combined
+                        combined[mut_id] = val[mut_id]
+                    else:
+                        assert mut_id not in combined
+                        combined[mut_id] = val[MAINLINE]
             else:
+                assert mut_id not in combined
                 combined[mut_id] = val
 
-        self._shadow = combined
+        self._shadow = get_active(combined)
 
     # def __getattribute__(self, name: str):
     #     if name in ["_shadow", "_do_op"]:
@@ -539,10 +658,13 @@ class ShadowVariable():
     #     raise NotImplementedError()
 
     def __repr__(self):
-        return f"{self._shadow}"
+        return f"sv:{self._shadow}"
+
+    def _get_paths(self):
+        return self._shadow.keys()
 
     def _do_op(self, other, op):
-        logger.debug("op: %s %s %s", self, other, op)
+        # logger.debug("op: %s %s %s", self, other, op)
         self_shadow = self._shadow
         if type(other) == ShadowVariable:
             other_shadow = other._shadow
@@ -559,10 +681,11 @@ class ShadowVariable():
             cs_ = { k: self_shadow[k].__getattribute__(op)(other_shadow[k]) for k in common_shadows}
             #assert vs[MAINLINE] == os[MAINLINE]
             res = {**vs_, **vo_, **cs_}
-            logger.debug("res: %s", res)
+            # logger.debug("res: %s", res)
             return ShadowVariable(res)
         else:
             res = { k: self_shadow[k].__getattribute__(op)(other) for k in self_shadow }
+            # logger.debug("res: %s %s", res, type(res[0]))
             return ShadowVariable(res)
 
 
