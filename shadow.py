@@ -2,6 +2,7 @@ from json.decoder import JSONDecodeError
 import os
 import sys
 import json
+from contextlib import contextmanager
 from collections import defaultdict
 from enum import Enum
 from pathlib import Path
@@ -18,6 +19,30 @@ logger = logging.getLogger(__name__)
 
 MAINLINE = 0
 LOGICAL_PATH = 0
+LINE_COUNTER = 0
+
+OLD_TRACE = sys.gettrace()
+
+
+def reset_lines():
+    global LINE_COUNTER
+    LINE_COUNTER = 0
+
+def line_increment():
+    global LINE_COUNTER
+    LINE_COUNTER += 1
+
+def traceit(frame, event, arg):
+    if event != 'line': return traceit
+    line_increment()
+    return traceit
+
+def enable_line_counting():
+    sys.settrace(traceit)
+
+def disable_line_counting():
+    sys.settrace(traceit)
+
 
 class SetEncoder(json.JSONEncoder):
     def default(self, obj):
@@ -89,6 +114,8 @@ class Forker():
         elif forked_pid != 0:
             # We are in parent, record the child pid and path.
             path_file.write_text(str(forked_pid))
+            # Now wait for the forked child, this minimizes the forked child processes and make
+            # this effectively single threaded.
             try:
                 os.waitpid(forked_pid, 0)
             except ChildProcessError as e:
@@ -100,9 +127,11 @@ class Forker():
 
             # Update which path child is supposed to follow
             LOGICAL_PATH = path
+            reset_lines()
             return True
 
     def wait_for_forks(self):
+        global LINE_COUNTER
         # if child, write results and exit
         if not self.is_parent:
             pid = self.my_pid()
@@ -117,6 +146,7 @@ class Forker():
                     results[res] = list(results[res])
                 results['pid'] = pid
                 results['path'] = path
+                results['line_count'] = LINE_COUNTER
                 json.dump(results, f)
 
             # exit the child immediately, this might cause problems for programs actually using multiprocessing
@@ -158,6 +188,8 @@ class Forker():
                         all_results[res] |= add_res
 
                     logger.debug(f"child results: {child_results}")
+                    logger.debug("child")
+                    LINE_COUNTER += child_results['line_count']
 
                     path_file.unlink()
                     result_file.unlink()
@@ -214,10 +246,7 @@ def reinit(logical_path: str=None, execution_mode: Union[None, str]=None):
         FORKING_CONTEXT = Forker()
     else:
         FORKING_CONTEXT = None
-
-
-# Init when importing shadow
-reinit()
+    enable_line_counting()
 
 
 def t_wait_for_forks():
@@ -236,13 +265,16 @@ def t_get_killed():
 
 
 def t_gather_results():
+    disable_line_counting()
     t_wait_for_forks()
 
     results = t_get_killed()
     results['execution_mode'] = EXECUTION_MODE.name
+    results['line_count'] = LINE_COUNTER
     if RESULT_FILE is not None:
         with open(RESULT_FILE, 'wt') as f:
             json.dump(results, f, cls=SetEncoder)
+    enable_line_counting()
     return results
 
 
@@ -253,6 +285,7 @@ def t_get_logical_path():
 def t_wrap(f):
     @wraps(f)
     def flow_wrapper(*args, **kwargs):
+        disable_line_counting()
         global LOGICAL_PATH
         global ACTIVE_MUTANTS
         global MASKED_MUTANTS
@@ -274,7 +307,9 @@ def t_wrap(f):
             logger.debug(f"cur path: {LOGICAL_PATH} remaining: {remaining_paths}")
             ACTIVE_MUTANTS = deepcopy(before_active)
             MASKED_MUTANTS = deepcopy(before_masked)
+            enable_line_counting()
             res = f(*args, **kwargs)
+            disable_line_counting()
             after_active = deepcopy(ACTIVE_MUTANTS)
             after_masked = deepcopy(MASKED_MUTANTS)
             logger.debug('wrapped: %s(%s %s) -> %s (%s)', f.__name__, args, kwargs, res, type(res))
@@ -288,7 +323,7 @@ def t_wrap(f):
                 tainted_return[LOGICAL_PATH] = res
 
                 if new_active:
-                    assert LOGICAL_PATH in new_active
+                    assert LOGICAL_PATH in new_active, new_active
 
                     for path in after_active or set():
                         # already recorded the LOGICAL_PATH result before the loop
@@ -307,7 +342,7 @@ def t_wrap(f):
                     log_res = shadow[MAINLINE]
 
                 if LOGICAL_PATH in tainted_return:
-                    assert tainted_return[LOGICAL_PATH] == log_res
+                    assert tainted_return[LOGICAL_PATH] == log_res, f"{tainted_return[LOGICAL_PATH]} == {log_res}"
                 else:
                     tainted_return[LOGICAL_PATH] = log_res
 
@@ -315,7 +350,7 @@ def t_wrap(f):
                     if path == MAINLINE or path == LOGICAL_PATH or path in new_masked:
                         continue
                     if path in tainted_return:
-                        assert tainted_return[path] == val
+                        assert tainted_return[path] == val, f"{tainted_return[path]} == {val}"
                     else:
                         tainted_return[path] = val
                     unused_active.discard(path)
@@ -340,15 +375,20 @@ def t_wrap(f):
 
         # If only mainline in return value untaint it
         if len(tainted_return) == 1:
-            assert MAINLINE in tainted_return
-            return tainted_return[MAINLINE]
+            assert MAINLINE in tainted_return, f"{tainted_return}"
+            res = tainted_return[MAINLINE]
+            enable_line_counting()
+            return res
 
-        return t_combine(tainted_return)
+        res = t_combine(tainted_return)
+        enable_line_counting()
+        return res
 
     return flow_wrapper
 
 
 def t_cond(cond):
+    disable_line_counting()
     global WEAKLY_KILLED
     global FORKING_CONTEXT
     global ACTIVE_MUTANTS
@@ -368,11 +408,11 @@ def t_cond(cond):
         mainline_res = shadow[MAINLINE]
         if LOGICAL_PATH in shadow:
             res = shadow[LOGICAL_PATH]
-            assert type(res) == bool
+            assert type(res) == bool, f"{type(res)}"
         else:
             res = mainline_res
 
-        assert type(mainline_res) == bool
+        assert type(mainline_res) == bool, f"{type(mainline_res)}"
 
         logger.debug("t_cond: (%s, %s) %s", LOGICAL_PATH, res, shadow)
 
@@ -411,8 +451,10 @@ def t_cond(cond):
                     for path in companion_mutants:
                         ACTIVE_MUTANTS.add(path)
 
+        enable_line_counting()
         return res
     else:
+        enable_line_counting()
         return cond
 
 
@@ -420,7 +462,6 @@ def get_active(mutations):
     filtered_mutations = {
         path: val for path, val in mutations.items()
         if path not in MASKED_MUTANTS
-        # path not in STRONGLY_KILLED and path not in WEAKLY_KILLED and 
     }
 
     if ACTIVE_MUTANTS is not None:
@@ -456,7 +497,7 @@ def shadow_assert(cmp_result):
                 logger.info(f"t_assert strongly killed: {path}")
 
         if ACTIVE_MUTANTS is not None and not shadow[MAINLINE]:
-            assert LOGICAL_PATH in ACTIVE_MUTANTS
+            assert LOGICAL_PATH in ACTIVE_MUTANTS, f"{ACTIVE_MUTANTS}"
             for mut in ACTIVE_MUTANTS:
                 if mut not in shadow:
                     STRONGLY_KILLED.add(mut)
@@ -464,7 +505,7 @@ def shadow_assert(cmp_result):
 
         # Do the actual assertion as would be done in the unchanged program but only for mainline execution
         if LOGICAL_PATH == MAINLINE:
-            assert shadow[MAINLINE]
+            assert shadow[MAINLINE], f"{shadow}"
     else:
         if not cmp_result:
             if ACTIVE_MUTANTS is not None:
@@ -472,12 +513,12 @@ def shadow_assert(cmp_result):
                     STRONGLY_KILLED.add(mut)
                     logger.info(f"t_assert strongly killed: {mut}")
             else:
-                assert cmp_result
+                assert cmp_result, f"Failed original assert"
 
 
 def split_assert(cmp_result):
     logger.debug(f"t_assert {cmp_result}")
-    assert type(cmp_result) == bool
+    assert type(cmp_result) == bool, f"{type(cmp_result)}"
     if cmp_result:
         return
     else:
@@ -487,12 +528,14 @@ def split_assert(cmp_result):
 
 
 def t_assert(cmp_result):
+    disable_line_counting()
     if EXECUTION_MODE in [ExecutionMode.SHADOW]:
         shadow_assert(cmp_result)
     elif EXECUTION_MODE in [ExecutionMode.SPLIT_STREAM, ExecutionMode.MODULO_EQV]:
         split_assert(cmp_result)
     else:
         raise ValueError("Unknown execution mode: {EXECUTION_MODE}")
+    enable_line_counting()
 
 
 def untaint(obj):
@@ -552,52 +595,50 @@ def combine_modulo_eqv(mutations):
 
 
 def t_combine(mutations):
+    disable_line_counting()
     if EXECUTION_MODE is ExecutionMode.SPLIT_STREAM:
-        return combine_split_stream(mutations)
+        res = combine_split_stream(mutations)
     elif EXECUTION_MODE is ExecutionMode.MODULO_EQV:
-        return combine_modulo_eqv(mutations)
+        res = combine_modulo_eqv(mutations)
     else:
-        return ShadowVariable(mutations)
+        res = ShadowVariable(mutations)
+    enable_line_counting()
+    return res
 
 
 ###############################################################################
 # tainted types
 
-
-# class ShadowProxy():
-#     __slots__ = ['_shadow', '_thing']
-
-#     def __init__(self, shadow, thing):
-#         print(shadow, thing)
-#         self._shadow = shadow
-#         self._thing = thing
-
-ALLOWED_DUNDER_METHODS = [
-    '__abs__', '__add__', '__and__', '__div__', '__divmod__', '__eq__', 
-    '__ne__', '__le__', '__len__', 
-    '__ge__', '__gt__', '__sub__', '__lt__',
-]
+ALLOWED_DUNDER_METHODS = {
+    'unary_ops': ['__bool__', '__abs__', '__round__', ],
+    'bool_ops': [
+        '__add__', '__and__', '__div__', '__truediv__', '__divmod__', '__eq__', 
+        '__ne__', '__le__', '__len__', 
+        '__ge__', '__gt__', '__sub__', '__lt__', '__mul__', 
+    ],
+}
 
 REDIRECTED_DUNDER_METHODS = [
-    ('__radd__', '__add__')
+    ('__radd__', '__add__'),
+    ('__rmul__', '__mul__'),
 ]
 
 DISALLOWED_DUNDER_METHODS = [
     '__aenter__', '__aexit__', '__aiter__', '__anext__', '__await__',
-    '__bool__', '__bytes__', '__call__', '__class__', '__cmp__', '__complex__', '__contains__',
+    '__bytes__', '__call__', '__class__', '__cmp__', '__complex__', '__contains__',
     '__delattr__', '__delete__', '__delitem__', '__delslice__', '__dir__', 
     '__enter__', '__exit__', '__float__', '__floordiv__', '__fspath__',
     '__get__', '__getitem__', '__getnewargs__', '__getslice__', 
     '__hash__', '__import__', '__imul__', '__index__',
     '__int__', '__invert__',
     '__ior__', '__iter__', '__ixor__', '__lshift__', 
-    '__mod__', '__mul__', '__neg__', '__next__', '__nonzero__',
+    '__mod__', '__neg__', '__next__', '__nonzero__',
     '__or__', '__pos__', '__pow__', '__prepare__', '__rand__', '__rdiv__',
     '__rdivmod__', '__reduce__', '__reduce_ex__', '__repr__', '__reversed__', '__rfloordiv__',
-    '__rlshift__', '__rmod__', '__rmul__', '__ror__', '__round__', '__rpow__', '__rrshift__',
+    '__rlshift__', '__rmod__', '__ror__', '__rpow__', '__rrshift__',
     '__rshift__', '__rsub__', '__rtruediv__', '__rxor__', '__set__', '__setitem__',
     '__setslice__', '__sizeof__', '__subclasscheck__', '__subclasses__',
-    '__truediv__', '__xor__', 
+    '__xor__', 
 ]
 
 LIST_OF_IGNORED_DUNDER_METHODS = [
@@ -606,46 +647,55 @@ LIST_OF_IGNORED_DUNDER_METHODS = [
     '__iadd__', '__iand__', '__isub__', 
 ]
 
+
 class ShadowVariable():
     __slots__ = ['_shadow']
 
-    for method in ALLOWED_DUNDER_METHODS:
+    for method in ALLOWED_DUNDER_METHODS['unary_ops']:
+        exec(f"""
+    def {method}(self, *args, **kwargs):
+        # assert len(args) == 0 and len(kwargs) == 0, f"{{len(args)}} == 0 and {{len(kwargs)}} == 0"
+        return self._do_unary_op("{method}", *args, **kwargs)
+        """.strip())
+
+    for method in ALLOWED_DUNDER_METHODS['bool_ops']:
         exec(f"""
     def {method}(self, other, *args, **kwargs):
-        assert len(args) == 0 and len(kwargs) == 0
-        return self._do_op(other, "{method}")
+        assert len(args) == 0 and len(kwargs) == 0, f"{{len(args)}} == 0 and {{len(kwargs)}} == 0"
+        return self._do_bool_op(other, "{method}", *args, **kwargs)
         """.strip())
 
     for from_method, to_method in REDIRECTED_DUNDER_METHODS:
         exec(f"""
     def {from_method}(self, other, *args, **kwargs):
-        assert len(args) == 0 and len(kwargs) == 0
+        # assert len(args) == 0 and len(kwargs) == 0, f"{{len(args)}} == 0 and {{len(kwargs)}} == 0"
         logger.debug(f"redirected {from_method} to {to_method}")
-        return self._do_op(other, "{to_method}")
+        return self._do_bool_op(other, "{to_method}", *args, **kwargs)
         """.strip())
 
     for method in DISALLOWED_DUNDER_METHODS:
         exec(f"""
     def {method}(self, *args, **kwargs):
+        logger.error("{method} %s %s %s", self, args, kwargs)
         raise ValueError("dunder method {method} is not allowed")
         """.strip())
 
     def __init__(self, values):
         combined = {}
+        mainline_val = values[MAINLINE]
+        if type(mainline_val) == ShadowVariable:
+            combined = mainline_val._shadow
+        else:
+            combined[MAINLINE] = mainline_val
         for mut_id, val in values.items():
+            if mut_id == MAINLINE:
+                continue
             if type(val) == ShadowVariable:
                 val = val._shadow
-                if mut_id == MAINLINE:
-                    for inner_mut_id, inner_val in val.items():
-                        assert inner_mut_id not in combined
-                        combined[inner_mut_id] = inner_val
+                if mut_id in val:
+                    combined[mut_id] = val[mut_id]
                 else:
-                    if mut_id in val:
-                        assert mut_id not in combined
-                        combined[mut_id] = val[mut_id]
-                    else:
-                        assert mut_id not in combined
-                        combined[mut_id] = val[MAINLINE]
+                    combined[mut_id] = val[MAINLINE]
             else:
                 assert mut_id not in combined
                 combined[mut_id] = val
@@ -663,8 +713,46 @@ class ShadowVariable():
     def _get_paths(self):
         return self._shadow.keys()
 
-    def _do_op(self, other, op):
+    def _check_op_available(shadow, op):
+        global STRONGLY_KILLED
+
+        killed = []
+        for k in shadow:
+            if k in [LOGICAL_PATH, MAINLINE]:
+                continue
+            try:
+                shadow.__getattribute__(op)
+            except AttributeError:
+                STRONGLY_KILLED.add(k)
+                killed.append(k)
+        for k in killed:
+            del shadow[k]
+
+    def _do_op_safely(self, paths, op):
+        global STRONGLY_KILLED
+        
+        res = {}
+        for k in paths:
+            try:
+                res[k] = op(k)
+            except AttributeError:
+                STRONGLY_KILLED.add(k)
+            except ZeroDivisionError:
+                STRONGLY_KILLED.add(k)
+                res[k] = None
+
+        return res
+
+    def _do_unary_op(self, op, *args, **kwargs):
         # logger.debug("op: %s %s %s", self, other, op)
+        self_shadow = self._shadow
+        res = self._do_op_safely(self_shadow.keys(), lambda k: self_shadow[k].__getattribute__(op)(*args, **kwargs))
+        # logger.debug("res: %s %s", res, type(res[0]))
+        return ShadowVariable(res)
+
+    def _do_bool_op(self, other, op, *args, **kwargs):
+
+        logger.debug("op: %s %s %s", self, other, op)
         self_shadow = self._shadow
         if type(other) == ShadowVariable:
             other_shadow = other._shadow
@@ -673,18 +761,30 @@ class ShadowVariable():
             other_main = other_shadow[MAINLINE]
             self_main = self_shadow[MAINLINE]
             common_shadows = {k for k in self_shadow if k in other_shadow}
-            vs_ = { k: self_shadow[k].__getattribute__(op)(other_main) for k in self_shadow if k not in other_shadow }
-            vo_ = { k: other_shadow[k].__getattribute__(op)(self_main) for k in other_shadow if k not in self_shadow }
+            vs_ = self._do_op_safely(
+                (k for k in self_shadow if k not in other_shadow),
+                lambda k: self_shadow[k].__getattribute__(op)(other_main, *args, **kwargs)
+            )
+            vo_ = self._do_op_safely(
+                (k for k in other_shadow if k not in self_shadow),
+                lambda k: other_shadow[k].__getattribute__(op)(self_main, *args, **kwargs)
+            )
 
             # if there was a preexisint taint of the same name, this mutation was
             # already executed. So, use that value.
-            cs_ = { k: self_shadow[k].__getattribute__(op)(other_shadow[k]) for k in common_shadows}
-            #assert vs[MAINLINE] == os[MAINLINE]
+            cs_ = self._do_op_safely(
+                common_shadows,
+                lambda k: self_shadow[k].__getattribute__(op)(other_shadow[k], *args, **kwargs)
+            )
             res = {**vs_, **vo_, **cs_}
             # logger.debug("res: %s", res)
             return ShadowVariable(res)
         else:
-            res = { k: self_shadow[k].__getattribute__(op)(other) for k in self_shadow }
+            res = { k: self_shadow[k].__getattribute__(op)(other, *args, **kwargs) for k in self_shadow }
+            res = self._do_op_safely(
+                self_shadow.keys(),
+                lambda k: self_shadow[k].__getattribute__(op)(other, *args, **kwargs)
+            )
             # logger.debug("res: %s %s", res, type(res[0]))
             return ShadowVariable(res)
 
@@ -757,3 +857,9 @@ class t_tuple():
 @taint
 class t_list():
     pass
+
+
+
+
+# Init when importing shadow
+reinit()

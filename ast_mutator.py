@@ -236,10 +236,9 @@ def f():
             mut_container.add(0, node.value)
 
         for mutation in [
-            "right != 1",
+            # "right != 1",
             "right + 1",
             "right * 2",
-            "(not right) + 1",
         ]:
             cur_mut_ctr = self.mutation_counter.get()
             mutation = ast.parse(mutation)

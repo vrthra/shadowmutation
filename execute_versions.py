@@ -15,7 +15,7 @@ def run_it(path, mode=None, logical_path=None, result_file=None, should_print=Fa
     if mode is not None:
         env['EXECUTION_MODE'] = mode
     res = run(['python3', path], stdout=PIPE, stderr=STDOUT, env=env)
-    if should_print:
+    if res.returncode != 0 or should_print:
         print(f"{res.args} => {res.returncode}")
         print(res.stdout.decode())
     return res
@@ -27,7 +27,9 @@ def get_res(path, mode):
     run_it(path, mode=mode, result_file=res_path)
     try:
         with open(res_path, 'rt') as f:
-            return json.load(f)
+            res = json.load(f)
+            # print(res)
+            return res
     except FileNotFoundError:
         return {'strong': ['error'], 'execution_mode': mode}
 
@@ -58,7 +60,15 @@ def main():
 
     run_it(Path(args.dir)/'original.py')
 
+    def get_sorted(data, key):
+        return sorted(data[key])
 
+    def get_mode(data):
+        return data['execution_mode']
+
+
+    print("Traditional results: {traditional_results}")
+    print("Comparing results:")
     mut_ids = []
     traditional_results = {'killed': [], 'alive': []}
     for path in sorted(list(Path(args.dir).glob("traditional_*.py"))):
@@ -69,33 +79,25 @@ def main():
             traditional_results['killed'].append(mut_id)
         else:
             traditional_results['alive'].append(mut_id)
+    trad_killed = get_sorted(traditional_results, 'killed')
+    print(trad_killed, "TRADITIONAL")
 
 
     split_stream_results = get_res(Path(args.dir)/"split_stream.py",     'split')
-    modulo_results =       get_res(Path(args.dir)/"split_stream.py",     'modulo')
-    shadow_results =       get_res(Path(args.dir)/"shadow_execution.py", 'shadow')
-
-    def get_sorted(data, key):
-        return sorted(data[key])
-
-    def get_mode(data):
-        return data['execution_mode']
-
-    trad_killed = get_sorted(traditional_results, 'killed')
     split_stream_killed = get_sorted(split_stream_results, 'strong')
-    modulo_killed = get_sorted(modulo_results, 'strong')
-    shadow_killed = get_sorted(shadow_results, 'strong')
-
     split_stream_mode = get_mode(split_stream_results)
-    modulo_mode = get_mode(modulo_results)
-    shadow_mode = get_mode(shadow_results)
-
-    print("Traditional results: {traditional_results}")
-    print("Comparing results:")
-    print(trad_killed, "TRADITIONAL")
     print(split_stream_killed, split_stream_mode)
+
+    modulo_results =       get_res(Path(args.dir)/"split_stream.py",     'modulo')
+    modulo_killed = get_sorted(modulo_results, 'strong')
+    modulo_mode = get_mode(modulo_results)
     print(modulo_killed, modulo_mode)
+
+    shadow_results =       get_res(Path(args.dir)/"shadow_execution.py", 'shadow')
+    shadow_killed = get_sorted(shadow_results, 'strong')
+    shadow_mode = get_mode(shadow_results)
     print(shadow_killed, shadow_mode)
+
 
     assert trad_killed == split_stream_killed
     assert trad_killed == modulo_killed

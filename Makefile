@@ -2,25 +2,20 @@
 
 export PYTHONPATH := $(shell pwd):$(PYTHONPATH)
 
-all: | test bank prime
+EXAMPLES := $(wildcard examples/*.py)
+SUBJECTS := $(notdir $(EXAMPLES:.py=))
 
-bank: tmp
-	rm -r tmp/bank || true
-	python3 ./ast_mutator.py --ignore "^test_" examples/bank.py tmp/bank
-	python execute_versions.py tmp/bank
+all: $(SUBJECTS)
 
-prime: tmp
-	rm -r tmp/prime || true
-	python3 ./ast_mutator.py --ignore "^test_" examples/prime.py tmp/prime
-	python execute_versions.py tmp/prime
+$(SUBJECTS): tmp
+	@echo $@
+	rm -r tmp/$@ || true
+	python3 ./ast_mutator.py --ignore "^test_" examples/$@.py tmp/$@
+	python execute_versions.py tmp/$@
+
 
 dev:
-	EXECUTION_MODE=split python3 tmp/bank/split_stream.py
-
-
-do-2.1: tmp
-	python3 ./ast_mutator.py examples/bank.py tmp/bank_mut.py
-	LOGICAL_PATH=2.1 python3 ./tmp/bank_mut.py
+	EXECUTION_MODE=shadow python3 tmp/prime/shadow_execution.py
 
 test:
 	pytest --log-cli-level=DEBUG --log-format="%(levelname)s %(process)d %(message)s"
