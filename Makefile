@@ -7,9 +7,11 @@ SUBJECTS := $(notdir $(EXAMPLES:.py=))
 
 all: $(SUBJECTS)
 
+clean:
+	rm -rf tmp
+
 $(SUBJECTS): | tmp
 	@echo $@
-	-rm -f tmp/$@
 	python3 ./ast_mutator.py --ignore "^test_" examples/$@.py tmp/$@
 	python execute_versions.py tmp/$@
 
