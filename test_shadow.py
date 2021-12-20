@@ -24,7 +24,7 @@ def get_killed():
 
 def test_reinit_t_assert():
     for ii in range(1, 4):
-        reinit(execution_mode='shadow')
+        reinit(execution_mode='shadow', no_atexit=True)
         tainted_int = t_combine({0: 0, ii: 1})
 
         t_assert(tainted_int == 0)
@@ -32,7 +32,7 @@ def test_reinit_t_assert():
 
 
 def test_split_stream_single_if():
-    reinit(execution_mode='shadow')
+    reinit(execution_mode='shadow', no_atexit=True)
     @t_wrap
     def func(tainted_int):
         if t_cond(tainted_int == 0):
@@ -47,7 +47,7 @@ def test_split_stream_single_if():
 
 
 def test_split_stream_double_if():
-    reinit(execution_mode='shadow')
+    reinit(execution_mode='shadow', no_atexit=True)
     @t_wrap
     def func(tainted_int):
         if t_cond(tainted_int <= 1):
@@ -76,7 +76,7 @@ def test_split_stream_double_if():
 
 
 def test_split_stream_nested_if_call():
-    reinit(execution_mode='shadow')
+    reinit(execution_mode='shadow', no_atexit=True)
     @t_wrap
     def inner(tainted_int):
         if t_cond(tainted_int == 1):
@@ -112,27 +112,27 @@ def test_wrap():
 
     assert simple(0, 1) == 0
 
-    reinit(execution_mode='shadow')
+    reinit(execution_mode='shadow', no_atexit=True)
     t_assert(simple(t_combine({0: 0, 1: 1}), 1) == 0)
     assert get_killed() == gen_killed([1], [1])
 
-    reinit(execution_mode='shadow')
+    reinit(execution_mode='shadow', no_atexit=True)
     t_assert(simple(1, t_combine({0: 0, 1: 1})) == 1)
     assert get_killed() == gen_killed([1], [])
 
-    reinit(execution_mode='shadow')
+    reinit(execution_mode='shadow', no_atexit=True)
     t_assert(simple(t_combine({0: 0, 1: 1}), t_combine({0: 0, 2: 1})) == 0)
     assert get_killed() == gen_killed([1], [1])
 
-    reinit(execution_mode='shadow')
+    reinit(execution_mode='shadow', no_atexit=True)
     t_assert(simple(2, t_combine({0: 1, 1: 2})) == 3)
     assert get_killed() == gen_killed([1], [])
 
-    reinit(execution_mode='shadow')
+    reinit(execution_mode='shadow', no_atexit=True)
     t_assert(simple(3, 1) == 0)
     assert get_killed() == gen_killed([10], [10])
 
-    reinit(execution_mode='shadow')
+    reinit(execution_mode='shadow', no_atexit=True)
     t_assert(simple(t_combine({0: 3, 1: 1}), 1) == 0)
     assert get_killed() == gen_killed([1, 10], [1, 10])
 
@@ -149,14 +149,14 @@ def test_wrap():
 
 @pytest.mark.skip(reason="not implemented: need to update t_tuple")
 def test_tuple_eq_with_tint_elem():
-    reinit(execution_mode='shadow')
+    reinit(execution_mode='shadow', no_atexit=True)
     tainted_int = t_combine({0: 0, 1: 1})
     data = t_tuple((1, 2, 3, tainted_int))
 
     t_assert(data == (1, 2, 3, 0))
     assert get_killed() == gen_killed({1: True}, {})
 
-    reinit(execution_mode='shadow')
+    reinit(execution_mode='shadow', no_atexit=True)
     t_assert((1, 2, 3, 0) == data)
     assert get_killed() == gen_killed({1: True}, {})
 
@@ -176,7 +176,7 @@ def test_tuple_eq_with_tint_elem():
 
 @pytest.mark.skip(reason="not implemented: need to hook equal of list")
 def test_list_eq_with_tint_elem():
-    reinit(execution_mode='shadow')
+    reinit(execution_mode='shadow', no_atexit=True)
     tainted_int = t_combine({0: 0, 1: 1})
     data = [1, 2, 3, tainted_int]
 
