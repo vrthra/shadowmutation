@@ -372,6 +372,7 @@ def generate_traditional_mutation(path, res_dir, function_ignore_regex, mut) -> 
     mode = Mode("traditional", [mut])
     with open(path, "rt") as f:
         tree = ast.parse(f.read())
+    tree.body.insert(0, ast.parse(f'from shadow import {", ".join(TAINT_MEMBERS)}').body[0])
     tree = ast.fix_missing_locations(ShadowExecutionTransformer(mode, function_ignore_regex).visit(tree))
 
     try:
@@ -389,6 +390,7 @@ def generate_traditional_mutation(path, res_dir, function_ignore_regex, mut) -> 
     mypy_result = api.run([str(res_path), "--strict"])
     if mypy_result[2] != 0:
         shutil.move(res_path, mypy_filtered_dir/res_path.name)
+        print(mypy_result[0])
         return mut, False, mypy_result
     return mut, True, mypy_result
 
@@ -401,7 +403,6 @@ def generate_split_stream(path, res_dir, function_ignore_regex, mutations):
     tree.body.insert(0, ast.parse(f'from shadow import {", ".join(TAINT_MEMBERS)}').body[0])
     tree = ast.fix_missing_locations(ShadowExecutionTransformer(mode, function_ignore_regex).visit(tree))
     tree = ast.fix_missing_locations(AssertTransformer().visit(tree))
-    tree.body.append(ast.parse(f't_gather_results()').body[0])
 
     res_path = res_dir/f"split_stream.py"
 
@@ -417,7 +418,6 @@ def generate_shadow(path, res_dir, function_ignore_regex, mutations):
     tree.body.insert(0, ast.parse(f'from shadow import {", ".join(TAINT_MEMBERS)}').body[0])
     tree = ast.fix_missing_locations(ShadowExecutionTransformer(mode, function_ignore_regex).visit(tree))
     tree = ast.fix_missing_locations(AssertTransformer().visit(tree))
-    tree.body.append(ast.parse(f't_gather_results()').body[0])
 
     res_path = res_dir/f"shadow_execution.py"
 

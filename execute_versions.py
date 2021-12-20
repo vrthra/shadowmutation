@@ -14,6 +14,7 @@ def run_it(path, mode=None, logical_path=None, result_file=None, should_print=Fa
         env['RESULT_FILE'] = str(result_file)
     if mode is not None:
         env['EXECUTION_MODE'] = mode
+    env['TRACE'] = "1"
     res = run(['python3', path], stdout=PIPE, stderr=STDOUT, env=env)
     if res.returncode != 0 or should_print:
         print(f"{res.args} => {res.returncode}")
@@ -24,33 +25,31 @@ def run_it(path, mode=None, logical_path=None, result_file=None, should_print=Fa
 def get_res(path, mode):
     res_path = Path('res.json')
     res_path.unlink(missing_ok=True)
-    run_it(path, mode=mode, result_file=res_path)
+    run_res = run_it(path, mode=mode, result_file=res_path)
     try:
         with open(res_path, 'rt') as f:
             res = json.load(f)
+            res['exit_code'] = run_res.returncode
             # print(res)
             return res
     except FileNotFoundError:
-        return {'strong': ['error'], 'execution_mode': mode}
+        return {'strong': ['error'], 'execution_mode': mode, 'exit_code': run_res.returncode}
 
 
-def shadow_res(path, mut_ids):
-    strongly_killed = set()
-    mut_ids = set(mut_ids)
-    while mut_ids:
-        m_id = mut_ids.pop()
-        res_path = Path('res.json')
-        res_path.unlink(missing_ok=True)
-        run_it(path, mode='shadow', logical_path=m_id, result_file=res_path)
-        try:
-            with open(res_path, 'rt') as f:
-                results = json.load(f)
-        except FileNotFoundError:
-            return {'strong': ['error'], 'execution_mode': 'shadow'}
-        assert results['execution_mode'] == 'SHADOW'
-        strongly_killed |= set(results['strong'])
-        mut_ids -= strongly_killed
-    return {'strong': list(strongly_killed), 'execution_mode': 'SHADOW'}
+def extract_data(data):
+    def get_sorted(data, key):
+        return sorted(data[key])
+
+    def get_mode(data):
+        return data['execution_mode']
+
+    def subj_count(data):
+        return data['subject_count']
+
+    def tool_count(data):
+        return data['tool_count']
+
+    return get_sorted(data, 'strong'), get_mode(data), subj_count(data), tool_count(data)
 
 
 def main():
@@ -60,43 +59,38 @@ def main():
 
     run_it(Path(args.dir)/'original.py')
 
-    def get_sorted(data, key):
-        return sorted(data[key])
 
-    def get_mode(data):
-        return data['execution_mode']
-
-
-    print("Traditional results: {traditional_results}")
-    print("Comparing results:")
     mut_ids = []
+    subject_ctr = 0
+    tool_ctr = 0
     traditional_results = {'killed': [], 'alive': []}
     for path in sorted(list(Path(args.dir).glob("traditional_*.py"))):
-        res = run_it(path)
+        res = get_res(path, None)
         mut_id = int(path.stem[len('traditional_'):])
         mut_ids.append(mut_id)
-        if res.returncode != 0:
+        # print(res)
+        subject_ctr += res['subject_count']
+        tool_ctr += res['tool_count']
+        if res['exit_code'] != 0:
             traditional_results['killed'].append(mut_id)
         else:
             traditional_results['alive'].append(mut_id)
-    trad_killed = get_sorted(traditional_results, 'killed')
-    print(trad_killed, "TRADITIONAL")
+    trad_killed = sorted(traditional_results['killed'])
+    print("Comparing results:")
+    print(trad_killed, "TRADITIONAL", subject_ctr, tool_ctr)
 
 
-    split_stream_results = get_res(Path(args.dir)/"split_stream.py",     'split')
-    split_stream_killed = get_sorted(split_stream_results, 'strong')
-    split_stream_mode = get_mode(split_stream_results)
-    print(split_stream_killed, split_stream_mode)
+    split_stream_killed, split_stream_mode, split_stream_subj_count, split_stream_tool_count = \
+        extract_data(get_res(Path(args.dir)/"split_stream.py",     'split'))
+    print(split_stream_killed, split_stream_mode, split_stream_subj_count, split_stream_tool_count)
 
-    modulo_results =       get_res(Path(args.dir)/"split_stream.py",     'modulo')
-    modulo_killed = get_sorted(modulo_results, 'strong')
-    modulo_mode = get_mode(modulo_results)
-    print(modulo_killed, modulo_mode)
+    modulo_killed, modulo_mode, modulo_subj_count, modulo_tool_count = \
+        extract_data(get_res(Path(args.dir)/"split_stream.py",     'modulo'))
+    print(modulo_killed, modulo_mode, modulo_subj_count, modulo_tool_count)
 
-    shadow_results =       get_res(Path(args.dir)/"shadow_execution.py", 'shadow')
-    shadow_killed = get_sorted(shadow_results, 'strong')
-    shadow_mode = get_mode(shadow_results)
-    print(shadow_killed, shadow_mode)
+    shadow_killed, shadow_mode, shadow_subj_count, shadow_tool_count = \
+        extract_data(get_res(Path(args.dir)/"shadow_execution.py", 'shadow'))
+    print(shadow_killed, shadow_mode, shadow_subj_count, shadow_tool_count)
 
 
     assert trad_killed == split_stream_killed

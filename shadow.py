@@ -1,7 +1,13 @@
+# mypy: ignore-errors
+# This file requires too much metaprogramming to provide correct typing for mypy.
+
 from json.decoder import JSONDecodeError
 import os
 import sys
 import json
+import time
+import atexit
+from typing import Any
 from contextlib import contextmanager
 from collections import defaultdict
 from enum import Enum
@@ -19,29 +25,91 @@ logger = logging.getLogger(__name__)
 
 MAINLINE = 0
 LOGICAL_PATH = 0
-LINE_COUNTER = 0
+SUBJECT_COUNTER = 0
+TOOL_COUNTER = 0
 
 OLD_TRACE = sys.gettrace()
 
 
+IGNORE_FILES = set([
+    "__init__.py",
+    "decoder.py",
+    "encoder.py",
+    "threading.py",
+    "genericpath.py",
+    "posixpath.py",
+    "types.py",
+    "enum.py",
+    "copy.py",
+    "abc.py",
+    "os.py",
+    "re.py",
+    "sre_compile.py",
+    "sre_parse.py",
+    "functools.py",
+    "tempfile.py",
+    "random.py",
+    "pathlib.py",
+    "codecs.py",
+    "fnmatch.py",
+    "_collections_abc.py",
+    "_weakrefset.py",
+    "_bootlocale.py",
+    "<frozen importlib._bootstrap>",
+    "<string>",
+])
+
+
+TOOL_FILES = set([
+    "shadow.py",
+])
+
+
 def reset_lines():
-    global LINE_COUNTER
-    LINE_COUNTER = 0
+    global SUBJECT_COUNTER
+    global TOOL_COUNTER
+    SUBJECT_COUNTER = 0
+    TOOL_COUNTER = 0
 
-def line_increment():
-    global LINE_COUNTER
-    LINE_COUNTER += 1
+def trace_func(frame, event, arg):
+    global SUBJECT_COUNTER
+    global TOOL_COUNTER
 
-def traceit(frame, event, arg):
-    if event != 'line': return traceit
-    line_increment()
-    return traceit
+    fname = frame.f_code.co_filename
+    fname_sub = Path(fname)
+    fname_sub_name = fname_sub.name
 
-def enable_line_counting():
-    sys.settrace(traceit)
+    if fname_sub_name in IGNORE_FILES:
+        # logger.debug(f"ignored: {fname_sub.name} {frame.f_code.co_name} {frame.f_code.co_firstlineno}")
+        return trace_func
+
+    # frame.f_trace_opcodes = True
+
+    if event != 'line':
+        return trace_func
+    # logger.debug(f"{frame} {arg}")
+
+    if frame.f_code.co_name in ["tool_line_counting", "subject_line_counting"]:
+        return trace_func
+
+    is_subject_file = fname_sub.parent.parent.parent.name == "shadowmutation" and \
+        fname_sub.parent.parent.name == "tmp"
+    is_tool_file = fname_sub_name in TOOL_FILES
+    assert not (is_subject_file and is_tool_file)
+    if not (is_subject_file or is_tool_file):
+        assert False, f"Unknown file: {fname}"
+
+    if is_tool_file:
+        # logger.debug(f"tool: {fname_sub.name} {frame.f_code.co_name} {frame.f_code.co_firstlineno}")
+        TOOL_COUNTER += 1
+    else:
+        # logger.debug(f"subject: {fname_sub.name} {frame.f_code.co_name} {frame.f_code.co_firstlineno}")
+        SUBJECT_COUNTER += 1
+
+    return trace_func
 
 def disable_line_counting():
-    sys.settrace(traceit)
+    sys.settrace(OLD_TRACE)
 
 
 class SetEncoder(json.JSONEncoder):
@@ -131,7 +199,8 @@ class Forker():
             return True
 
     def wait_for_forks(self):
-        global LINE_COUNTER
+        global SUBJECT_COUNTER
+        global TOOL_COUNTER
         # if child, write results and exit
         if not self.is_parent:
             pid = self.my_pid()
@@ -146,7 +215,8 @@ class Forker():
                     results[res] = list(results[res])
                 results['pid'] = pid
                 results['path'] = path
-                results['line_count'] = LINE_COUNTER
+                results['subject_count'] = SUBJECT_COUNTER
+                results['tool_count'] = TOOL_COUNTER
                 json.dump(results, f)
 
             # exit the child immediately, this might cause problems for programs actually using multiprocessing
@@ -157,6 +227,7 @@ class Forker():
         all_results = t_get_killed()
         while True:
             is_done = True
+            time.sleep(1)
             for path_file in (self.sync_dir/'paths').glob("*"):
                 is_done = False
                 try:
@@ -169,6 +240,7 @@ class Forker():
                 try:
                     os.waitpid(child_pid, 0)
                 except ChildProcessError as e:
+                    logger.debug(f"{e}")
                     pass
 
                 result_file = self.sync_dir/'results'/str(child_pid)
@@ -189,7 +261,8 @@ class Forker():
 
                     logger.debug(f"child results: {child_results}")
                     logger.debug("child")
-                    LINE_COUNTER += child_results['line_count']
+                    SUBJECT_COUNTER += child_results['subject_count']
+                    TOOL_COUNTER += child_results['tool_count']
 
                     path_file.unlink()
                     result_file.unlink()
@@ -212,7 +285,7 @@ RESULT_FILE = None
 FORKING_CONTEXT: Union[None, Forker] = None
 
 
-def reinit(logical_path: str=None, execution_mode: Union[None, str]=None):
+def reinit(logical_path: str=None, execution_mode: Union[None, str]=None, no_atexit=False):
     logger.info("Reinit global shadow state")
     # initializing shadow
     global LOGICAL_PATH
@@ -223,6 +296,9 @@ def reinit(logical_path: str=None, execution_mode: Union[None, str]=None):
     global EXECUTION_MODE
     global FORKING_CONTEXT
     global RESULT_FILE
+
+    if os.environ.get("TRACE", "0") == "1":
+        sys.settrace(trace_func)
 
     RESULT_FILE = os.environ.get('RESULT_FILE')
 
@@ -246,7 +322,11 @@ def reinit(logical_path: str=None, execution_mode: Union[None, str]=None):
         FORKING_CONTEXT = Forker()
     else:
         FORKING_CONTEXT = None
-    enable_line_counting()
+
+    if not no_atexit:
+        atexit.register(t_gather_results)
+    else:
+        atexit.unregister(t_gather_results)
 
 
 def t_wait_for_forks():
@@ -264,17 +344,24 @@ def t_get_killed():
     }
 
 
-def t_gather_results():
-    disable_line_counting()
+def t_counter_results():
+    res = {}
+    res['subject_count'] = SUBJECT_COUNTER
+    res['tool_count'] = TOOL_COUNTER
+    return res
+
+
+def t_gather_results() -> Any:
     t_wait_for_forks()
 
     results = t_get_killed()
     results['execution_mode'] = EXECUTION_MODE.name
-    results['line_count'] = LINE_COUNTER
+    results = {**results, **t_counter_results()}
     if RESULT_FILE is not None:
         with open(RESULT_FILE, 'wt') as f:
             json.dump(results, f, cls=SetEncoder)
-    enable_line_counting()
+    logging.info(f"{results}")
+    disable_line_counting()
     return results
 
 
@@ -285,7 +372,6 @@ def t_get_logical_path():
 def t_wrap(f):
     @wraps(f)
     def flow_wrapper(*args, **kwargs):
-        disable_line_counting()
         global LOGICAL_PATH
         global ACTIVE_MUTANTS
         global MASKED_MUTANTS
@@ -307,9 +393,7 @@ def t_wrap(f):
             logger.debug(f"cur path: {LOGICAL_PATH} remaining: {remaining_paths}")
             ACTIVE_MUTANTS = deepcopy(before_active)
             MASKED_MUTANTS = deepcopy(before_masked)
-            enable_line_counting()
             res = f(*args, **kwargs)
-            disable_line_counting()
             after_active = deepcopy(ACTIVE_MUTANTS)
             after_masked = deepcopy(MASKED_MUTANTS)
             logger.debug('wrapped: %s(%s %s) -> %s (%s)', f.__name__, args, kwargs, res, type(res))
@@ -377,18 +461,15 @@ def t_wrap(f):
         if len(tainted_return) == 1:
             assert MAINLINE in tainted_return, f"{tainted_return}"
             res = tainted_return[MAINLINE]
-            enable_line_counting()
             return res
 
         res = t_combine(tainted_return)
-        enable_line_counting()
         return res
 
     return flow_wrapper
 
 
-def t_cond(cond):
-    disable_line_counting()
+def t_cond(cond: Any) -> bool:
     global WEAKLY_KILLED
     global FORKING_CONTEXT
     global ACTIVE_MUTANTS
@@ -451,10 +532,8 @@ def t_cond(cond):
                     for path in companion_mutants:
                         ACTIVE_MUTANTS.add(path)
 
-        enable_line_counting()
         return res
     else:
-        enable_line_counting()
         return cond
 
 
@@ -528,14 +607,12 @@ def split_assert(cmp_result):
 
 
 def t_assert(cmp_result):
-    disable_line_counting()
     if EXECUTION_MODE in [ExecutionMode.SHADOW]:
         shadow_assert(cmp_result)
     elif EXECUTION_MODE in [ExecutionMode.SPLIT_STREAM, ExecutionMode.MODULO_EQV]:
         split_assert(cmp_result)
     else:
         raise ValueError("Unknown execution mode: {EXECUTION_MODE}")
-    enable_line_counting()
 
 
 def untaint(obj):
@@ -594,15 +671,13 @@ def combine_modulo_eqv(mutations):
         return mutations[MAINLINE]
 
 
-def t_combine(mutations):
-    disable_line_counting()
+def t_combine(mutations: dict[int, Any]) -> Any:
     if EXECUTION_MODE is ExecutionMode.SPLIT_STREAM:
         res = combine_split_stream(mutations)
     elif EXECUTION_MODE is ExecutionMode.MODULO_EQV:
         res = combine_modulo_eqv(mutations)
     else:
         res = ShadowVariable(mutations)
-    enable_line_counting()
     return res
 
 
@@ -649,6 +724,7 @@ LIST_OF_IGNORED_DUNDER_METHODS = [
 
 
 class ShadowVariable():
+    _shadow: dict[int, Any]
     __slots__ = ['_shadow']
 
     for method in ALLOWED_DUNDER_METHODS['unary_ops']:
