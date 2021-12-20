@@ -7,9 +7,9 @@ SUBJECTS := $(notdir $(EXAMPLES:.py=))
 
 all: $(SUBJECTS)
 
-$(SUBJECTS): tmp
+$(SUBJECTS): | tmp
 	@echo $@
-	rm -r tmp/$@ || true
+	-rm -f tmp/$@
 	python3 ./ast_mutator.py --ignore "^test_" examples/$@.py tmp/$@
 	python execute_versions.py tmp/$@
 
@@ -22,5 +22,5 @@ test:
 
 
 tmp:
-	mkdir tmp
+	mkdir -p tmp
 
