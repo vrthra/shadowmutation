@@ -7,6 +7,7 @@ import sys
 import json
 import time
 import atexit
+from collections import Counter
 from typing import Any
 from contextlib import contextmanager
 from collections import defaultdict
@@ -27,6 +28,7 @@ MAINLINE = 0
 LOGICAL_PATH = 0
 SUBJECT_COUNTER = 0
 TOOL_COUNTER = 0
+SUBJECT_COUNTER_DICT = None
 
 OLD_TRACE = sys.gettrace()
 
@@ -67,12 +69,16 @@ TOOL_FILES = set([
 
 def reset_lines():
     global SUBJECT_COUNTER
+    global SUBJECT_COUNTER_DICT
     global TOOL_COUNTER
     SUBJECT_COUNTER = 0
+    SUBJECT_COUNTER_DICT = defaultdict(int)
     TOOL_COUNTER = 0
+
 
 def trace_func(frame, event, arg):
     global SUBJECT_COUNTER
+    global SUBJECT_COUNTER_DICT
     global TOOL_COUNTER
 
     fname = frame.f_code.co_filename
@@ -85,11 +91,14 @@ def trace_func(frame, event, arg):
 
     # frame.f_trace_opcodes = True
 
+    # logger.debug(f"{dir(frame)}")
+    # logger.debug(f"{frame}")
     if event != 'line':
         return trace_func
-    # logger.debug(f"{frame} {arg}")
 
-    if frame.f_code.co_name in ["tool_line_counting", "subject_line_counting"]:
+    if frame.f_code.co_name in [
+        "tool_line_counting", "subject_line_counting", "t_gather_results", "disable_line_counting"
+    ]:
         return trace_func
 
     is_subject_file = fname_sub.parent.parent.parent.name == "shadowmutation" and \
@@ -103,7 +112,8 @@ def trace_func(frame, event, arg):
         # logger.debug(f"tool: {fname_sub.name} {frame.f_code.co_name} {frame.f_code.co_firstlineno}")
         TOOL_COUNTER += 1
     else:
-        # logger.debug(f"subject: {fname_sub.name} {frame.f_code.co_name} {frame.f_code.co_firstlineno}")
+        logger.debug(f"subject: {fname_sub.name} {frame.f_code.co_name} {frame.f_lineno}")
+        SUBJECT_COUNTER_DICT[(fname_sub.name, frame.f_lineno)] += 1
         SUBJECT_COUNTER += 1
 
     return trace_func
@@ -188,6 +198,7 @@ class Forker():
                 os.waitpid(forked_pid, 0)
             except ChildProcessError as e:
                 pass
+            logger.debug(f"Counter parent: {SUBJECT_COUNTER} {TOOL_COUNTER}")
             return False
         else:
             # Update that this is the child.
@@ -196,6 +207,7 @@ class Forker():
             # Update which path child is supposed to follow
             LOGICAL_PATH = path
             reset_lines()
+            logger.debug(f"Counter child: {SUBJECT_COUNTER} {TOOL_COUNTER}")
             return True
 
     def wait_for_forks(self):
@@ -216,6 +228,7 @@ class Forker():
                 results['pid'] = pid
                 results['path'] = path
                 results['subject_count'] = SUBJECT_COUNTER
+                results['subject_count_lines'] = {'::'.join(str(a) for a in k): v for k, v in SUBJECT_COUNTER_DICT.items()}
                 results['tool_count'] = TOOL_COUNTER
                 json.dump(results, f)
 
@@ -263,6 +276,10 @@ class Forker():
                     logger.debug("child")
                     SUBJECT_COUNTER += child_results['subject_count']
                     TOOL_COUNTER += child_results['tool_count']
+                    for k, v in child_results['subject_count_lines'].items():
+                        key = k.split("::")
+                        key[1] = int(key[1])
+                        SUBJECT_COUNTER_DICT[tuple(key)] += v
 
                     path_file.unlink()
                     result_file.unlink()
@@ -297,9 +314,6 @@ def reinit(logical_path: str=None, execution_mode: Union[None, str]=None, no_ate
     global FORKING_CONTEXT
     global RESULT_FILE
 
-    if os.environ.get("TRACE", "0") == "1":
-        sys.settrace(trace_func)
-
     RESULT_FILE = os.environ.get('RESULT_FILE')
 
     if logical_path is not None:
@@ -328,6 +342,10 @@ def reinit(logical_path: str=None, execution_mode: Union[None, str]=None, no_ate
     else:
         atexit.unregister(t_gather_results)
 
+    if os.environ.get("TRACE", "0") == "1":
+        sys.settrace(trace_func)
+        reset_lines()
+
 
 def t_wait_for_forks():
     global FORKING_CONTEXT
@@ -347,11 +365,13 @@ def t_get_killed():
 def t_counter_results():
     res = {}
     res['subject_count'] = SUBJECT_COUNTER
+    res['subject_count_lines'] = sorted(SUBJECT_COUNTER_DICT.items(), key=lambda x: x[0])
     res['tool_count'] = TOOL_COUNTER
     return res
 
 
 def t_gather_results() -> Any:
+    disable_line_counting()
     t_wait_for_forks()
 
     results = t_get_killed()
@@ -361,7 +381,6 @@ def t_gather_results() -> Any:
         with open(RESULT_FILE, 'wt') as f:
             json.dump(results, f, cls=SetEncoder)
     logging.info(f"{results}")
-    disable_line_counting()
     return results
 
 
@@ -565,7 +584,7 @@ def shadow_assert(cmp_result):
     global STRONGLY_KILLED
     global WEAKLY_KILLED
     shadow = get_active_shadow(cmp_result)
-    logger.debug(f"t_assert {cmp_result} {shadow}")
+    # logger.debug(f"t_assert {cmp_result} {shadow}")
     if shadow is not None:
         for path, val in shadow.items():
             # The mainline assertion is done after the for loop
@@ -596,14 +615,14 @@ def shadow_assert(cmp_result):
 
 
 def split_assert(cmp_result):
-    logger.debug(f"t_assert {cmp_result}")
+    # logger.debug(f"t_assert {cmp_result}")
     assert type(cmp_result) == bool, f"{type(cmp_result)}"
     if cmp_result:
         return
     else:
         for mut in ACTIVE_MUTANTS:
             STRONGLY_KILLED.add(mut)
-            logger.info(f"t_assert strongly killed: {mut}")
+            # logger.info(f"t_assert strongly killed: {mut}")
 
 
 def t_assert(cmp_result):
@@ -693,9 +712,13 @@ ALLOWED_DUNDER_METHODS = {
     ],
 }
 
-REDIRECTED_DUNDER_METHODS = [
-    ('__radd__', '__add__'),
-    ('__rmul__', '__mul__'),
+RIGHT_DUNDER_METHODS = [
+    # ('__radd__', '__add__'),
+    # ('__rmul__', '__mul__'),
+    # ('__rmod__', '__mod__'),
+    '__radd__',
+    '__rmul__',
+    '__rmod__',
 ]
 
 DISALLOWED_DUNDER_METHODS = [
@@ -710,7 +733,7 @@ DISALLOWED_DUNDER_METHODS = [
     '__mod__', '__neg__', '__next__', '__nonzero__',
     '__or__', '__pos__', '__pow__', '__prepare__', '__rand__', '__rdiv__',
     '__rdivmod__', '__reduce__', '__reduce_ex__', '__repr__', '__reversed__', '__rfloordiv__',
-    '__rlshift__', '__rmod__', '__ror__', '__rpow__', '__rrshift__',
+    '__rlshift__', '__ror__', '__rpow__', '__rrshift__',
     '__rshift__', '__rsub__', '__rtruediv__', '__rxor__', '__set__', '__setitem__',
     '__setslice__', '__sizeof__', '__subclasscheck__', '__subclasses__',
     '__xor__', 
@@ -741,12 +764,13 @@ class ShadowVariable():
         return self._do_bool_op(other, "{method}", *args, **kwargs)
         """.strip())
 
-    for from_method, to_method in REDIRECTED_DUNDER_METHODS:
+    # swith self with other to get the correct result when redirecting to original method
+        # logger.debug(f"redirected {from_method} to {to_method}")
+    for method in RIGHT_DUNDER_METHODS:
         exec(f"""
-    def {from_method}(self, other, *args, **kwargs):
+    def {method}(self, other, *args, **kwargs):
         # assert len(args) == 0 and len(kwargs) == 0, f"{{len(args)}} == 0 and {{len(kwargs)}} == 0"
-        logger.debug(f"redirected {from_method} to {to_method}")
-        return self._do_bool_op(other, "{to_method}", *args, **kwargs)
+        return self._do_bool_op(other, "{method}", *args, **kwargs)
         """.strip())
 
     for method in DISALLOWED_DUNDER_METHODS:

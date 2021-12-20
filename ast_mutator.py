@@ -376,7 +376,7 @@ def generate_traditional_mutation(path, res_dir, function_ignore_regex, mut) -> 
     tree = ast.fix_missing_locations(ShadowExecutionTransformer(mode, function_ignore_regex).visit(tree))
 
     try:
-        source = astor.to_source(tree)
+        source = to_source(tree)
     except Exception as exc:
         return mut, False, (1, exc, None)
 
@@ -407,7 +407,7 @@ def generate_split_stream(path, res_dir, function_ignore_regex, mutations):
     res_path = res_dir/f"split_stream.py"
 
     with open(res_path, "wt") as f:
-        f.write(astor.to_source(tree))
+        f.write(to_source(tree))
 
 
 def generate_shadow(path, res_dir, function_ignore_regex, mutations):
@@ -422,7 +422,7 @@ def generate_shadow(path, res_dir, function_ignore_regex, mutations):
     res_path = res_dir/f"shadow_execution.py"
 
     with open(res_path, "wt") as f:
-        f.write(astor.to_source(tree))
+        f.write(to_source(tree))
 
 
 def load_and_mutate(path, function_ignore_regex):
@@ -432,6 +432,10 @@ def load_and_mutate(path, function_ignore_regex):
     tree = ast.fix_missing_locations(ShadowExecutionTransformer(function_ignore_regex).visit(tree))
     tree = ast.fix_missing_locations(AssertTransformer().visit(tree))
     return tree
+
+
+def to_source(tree):
+    return astor.to_source(tree, pretty_source=lambda x: ''.join(x))
 
 
 def main():
@@ -483,7 +487,7 @@ def main():
 
     # mutated_source = load_and_mutate(args.source, args.ignore)
     # with open(args.target, "wt") as f:
-    #     f.write(astor.to_source(mutated_source))
+    #     f.write(to_source(mutated_source))
 
 
 if __name__ == "__main__":
