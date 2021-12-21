@@ -390,7 +390,7 @@ def generate_traditional_mutation(path, res_dir, function_ignore_regex, mut) -> 
     mypy_result = api.run([str(res_path), "--strict"])
     if mypy_result[2] != 0:
         shutil.move(res_path, mypy_filtered_dir/res_path.name)
-        print(mypy_result[0])
+        # print(mypy_result[0])
         return mut, False, mypy_result
     return mut, True, mypy_result
 

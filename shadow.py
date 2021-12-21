@@ -54,6 +54,7 @@ IGNORE_FILES = set([
     "pathlib.py",
     "codecs.py",
     "fnmatch.py",
+    "typing.py",
     "_collections_abc.py",
     "_weakrefset.py",
     "_bootlocale.py",
@@ -134,6 +135,7 @@ class ExecutionMode(Enum):
     SPLIT_STREAM = 1 # split stream execution
     MODULO_EQV = 2 # split stream + modulo equivalence pruning execution
     SHADOW = 3 # shadow types and no forking
+    SHADOW_FORK = 4 # shadow and forking
 
     def get_mode(mode):
         if mode is None:
@@ -144,11 +146,13 @@ class ExecutionMode(Enum):
             return ExecutionMode.MODULO_EQV
         elif mode == 'shadow':
             return ExecutionMode.SHADOW
+        elif mode == 'shadow_fork':
+            return ExecutionMode.SHADOW_FORK
         else:
             raise ValueError("Unknown Execution Mode", mode)
 
     def should_start_forker(self):
-        if self in [ExecutionMode.SPLIT_STREAM, ExecutionMode.MODULO_EQV]:
+        if self in [ExecutionMode.SPLIT_STREAM, ExecutionMode.MODULO_EQV, ExecutionMode.SHADOW_FORK]:
             return True
         else:
             return False
@@ -166,6 +170,12 @@ class Forker():
         self.sync_dir = Path(mkdtemp())
         (self.sync_dir/'paths').mkdir()
         (self.sync_dir/'results').mkdir()
+
+    def __del__(self):
+        if self.is_parent:
+            (self.sync_dir/'paths').rmdir()
+            (self.sync_dir/'results').rmdir()
+            self.sync_dir.rmdir()
 
     def my_pid(self):
         return os.getpid()
@@ -210,7 +220,8 @@ class Forker():
             logger.debug(f"Counter child: {SUBJECT_COUNTER} {TOOL_COUNTER}")
             return True
 
-    def wait_for_forks(self):
+    def wait_for_forks(self, fork_res=None):
+        global ACTIVE_MUTANTS
         global SUBJECT_COUNTER
         global TOOL_COUNTER
         # if child, write results and exit
@@ -230,17 +241,24 @@ class Forker():
                 results['subject_count'] = SUBJECT_COUNTER
                 results['subject_count_lines'] = {'::'.join(str(a) for a in k): v for k, v in SUBJECT_COUNTER_DICT.items()}
                 results['tool_count'] = TOOL_COUNTER
+                logger.debug(f"{fork_res}")
+                if type(fork_res) == ShadowVariable:
+                    results['fork_res'] = fork_res._shadow
+                else:
+                    assert type(fork_res) != dict
+                    results['fork_res'] = fork_res
                 json.dump(results, f)
 
             # exit the child immediately, this might cause problems for programs actually using multiprocessing
-            # but this is a prototype and this fixes problems with pytest
+            # but this is a prototype
             os._exit(0)
 
         # wait for all child processes to end
+        combined_fork_res = [fork_res]
         all_results = t_get_killed()
         while True:
             is_done = True
-            time.sleep(1)
+            time.sleep(.1)
             for path_file in (self.sync_dir/'paths').glob("*"):
                 is_done = False
                 try:
@@ -253,8 +271,8 @@ class Forker():
                 try:
                     os.waitpid(child_pid, 0)
                 except ChildProcessError as e:
-                    logger.debug(f"{e}")
-                    pass
+                    if e.errno != 10:
+                        logger.debug(f"{e}")
 
                 result_file = self.sync_dir/'results'/str(child_pid)
                 if result_file.is_file():
@@ -273,7 +291,6 @@ class Forker():
                         all_results[res] |= add_res
 
                     logger.debug(f"child results: {child_results}")
-                    logger.debug("child")
                     SUBJECT_COUNTER += child_results['subject_count']
                     TOOL_COUNTER += child_results['tool_count']
                     for k, v in child_results['subject_count_lines'].items():
@@ -281,16 +298,19 @@ class Forker():
                         key[1] = int(key[1])
                         SUBJECT_COUNTER_DICT[tuple(key)] += v
 
+                    child_fork_res = child_results['fork_res']
+                    if type(child_fork_res) == dict:
+                        combined_fork_res.append(child_results)
+                    else:
+                        combined_fork_res.append(child_results)
+
                     path_file.unlink()
                     result_file.unlink()
             
             if is_done:
                 break
         logger.debug(f"Done waiting for forks.")
-
-        (self.sync_dir/'paths').rmdir()
-        (self.sync_dir/'results').rmdir()
-        self.sync_dir.rmdir()
+        return combined_fork_res
 
 
 STRONGLY_KILLED = None
@@ -337,7 +357,7 @@ def reinit(logical_path: str=None, execution_mode: Union[None, str]=None, no_ate
     else:
         FORKING_CONTEXT = None
 
-    if not no_atexit:
+    if os.environ.get('GATHER_ATEXIT', '0') == '1':
         atexit.register(t_gather_results)
     else:
         atexit.unregister(t_gather_results)
@@ -388,102 +408,154 @@ def t_get_logical_path():
     return LOGICAL_PATH
 
 
+def fork_wrap(f, *args, **kwargs):
+    global FORKING_CONTEXT
+    global ACTIVE_MUTANTS
+    global MASKED_MUTANTS
+    old_forking_context = FORKING_CONTEXT
+    old_active_mutants = deepcopy(ACTIVE_MUTANTS)
+    old_masked_mutants = deepcopy(MASKED_MUTANTS)
+
+    FORKING_CONTEXT = Forker()
+    try:
+        res = f(*args, **kwargs)
+    except Exception:
+        raise NotImplementedError("Exceptions in wrapped functions are not supported.")
+    combined_results = FORKING_CONTEXT.wait_for_forks(fork_res=res)
+
+    FORKING_CONTEXT = old_forking_context
+    ACTIVE_MUTANTS = old_active_mutants
+    MASKED_MUTANTS = old_masked_mutants
+
+    as_shadow = {}
+    # mainline value is always in first
+    as_shadow = {MAINLINE: combined_results[0]}
+    for child_res in combined_results[1:]:
+        child_fork_res = child_res['fork_res']
+        if type(child_fork_res) == dict:
+            for active in child_res['active']:
+                as_shadow[active] = ShadowVariable({int(k): v for k, v in child_fork_res.items()})
+        else:
+            for active in child_res['active']:
+                as_shadow[active] = child_fork_res
+
+    res = ShadowVariable(as_shadow)
+
+    # If only mainline in return value untaint it
+    if len(res._shadow) == 1:
+        assert MAINLINE in res._shadow, f"{res}"
+        res = res._shadow[MAINLINE]
+        return res
+
+    return res
+
+
+def no_fork_wrap(f, *args, **kwargs):
+    global LOGICAL_PATH
+    global ACTIVE_MUTANTS
+    global MASKED_MUTANTS
+    logger.debug(f"CALL {f.__name__}({args} {kwargs})")
+    before_active = deepcopy(ACTIVE_MUTANTS)
+    before_masked = deepcopy(MASKED_MUTANTS)
+
+    remaining_paths = set([0])
+    done_paths = set()
+
+    for arg in chain(args, kwargs.values()):
+        if type(arg) == ShadowVariable:
+            remaining_paths |= arg._get_paths()
+    remaining_paths -= before_masked
+
+    tainted_return = {}
+    while remaining_paths:
+        LOGICAL_PATH = remaining_paths.pop()
+        logger.debug(f"cur path: {LOGICAL_PATH} remaining: {remaining_paths}")
+        ACTIVE_MUTANTS = deepcopy(before_active)
+        MASKED_MUTANTS = deepcopy(before_masked)
+        try:
+            res = f(*args, **kwargs)
+        except Exception:
+            raise NotImplementedError("Exceptions in wrapped functions are not supported.")
+        after_active = deepcopy(ACTIVE_MUTANTS)
+        after_masked = deepcopy(MASKED_MUTANTS)
+        logger.debug('wrapped: %s(%s %s) -> %s (%s)', f.__name__, args, kwargs, res, type(res))
+        new_active = (after_active or set()) - (before_active or set())
+        new_masked = after_masked - before_masked
+        
+        logger.debug("masked: %s %s %s", before_masked, after_masked, new_masked)
+        logger.debug("active: %s %s %s", before_active, after_active, new_active)
+        if type(res) != ShadowVariable:
+            assert LOGICAL_PATH not in tainted_return, f"{LOGICAL_PATH} {tainted_return}"
+            tainted_return[LOGICAL_PATH] = res
+
+            if new_active:
+                assert LOGICAL_PATH in new_active, new_active
+
+                for path in after_active or set():
+                    # already recorded the LOGICAL_PATH result before the loop
+                    if path == LOGICAL_PATH:
+                        continue
+                    assert path not in tainted_return, f"{path} {tainted_return}"
+                    tainted_return[path] = res
+        elif type(res) == ShadowVariable:
+            shadow = get_active(res._shadow)
+            unused_active = new_active
+
+            if LOGICAL_PATH in shadow:
+                unused_active.discard(LOGICAL_PATH)
+                log_res = shadow[LOGICAL_PATH]
+            else:
+                log_res = shadow[MAINLINE]
+
+            if LOGICAL_PATH in tainted_return:
+                assert tainted_return[LOGICAL_PATH] == log_res, f"{tainted_return[LOGICAL_PATH]} == {log_res}"
+            else:
+                tainted_return[LOGICAL_PATH] = log_res
+
+            for path, val in shadow.items():
+                if path == MAINLINE or path == LOGICAL_PATH or path in new_masked:
+                    continue
+                if path in tainted_return:
+                    assert tainted_return[path] == val, f"{tainted_return[path]} == {val}"
+                else:
+                    tainted_return[path] = val
+                unused_active.discard(path)
+                done_paths.add(path)
+            
+            for path in unused_active:
+                tainted_return[path] = shadow[MAINLINE]
+                done_paths.add(path)
+
+        # logger.debug(f"cur return {tainted_return}")
+
+        done_paths |= new_active
+        done_paths.add(LOGICAL_PATH)
+        remaining_paths |= new_masked
+        remaining_paths -= done_paths
+
+    LOGICAL_PATH = MAINLINE
+    ACTIVE_MUTANTS = before_active
+    MASKED_MUTANTS = before_masked
+
+    logger.debug("return: %s", tainted_return)
+
+    # If only mainline in return value untaint it
+    if len(tainted_return) == 1:
+        assert MAINLINE in tainted_return, f"{tainted_return}"
+        res = tainted_return[MAINLINE]
+        return res
+
+    res = t_combine(tainted_return)
+    return res
+
+
 def t_wrap(f):
     @wraps(f)
     def flow_wrapper(*args, **kwargs):
-        global LOGICAL_PATH
-        global ACTIVE_MUTANTS
-        global MASKED_MUTANTS
-        logger.debug(f"CALL {f.__name__}({args} {kwargs})")
-        before_active = deepcopy(ACTIVE_MUTANTS)
-        before_masked = deepcopy(MASKED_MUTANTS)
-
-        remaining_paths = set([0])
-        done_paths = set()
-
-        for arg in chain(args, kwargs.values()):
-            if type(arg) == ShadowVariable:
-                remaining_paths |= arg._get_paths()
-        remaining_paths -= before_masked
-
-        tainted_return = {}
-        while remaining_paths:
-            LOGICAL_PATH = remaining_paths.pop()
-            logger.debug(f"cur path: {LOGICAL_PATH} remaining: {remaining_paths}")
-            ACTIVE_MUTANTS = deepcopy(before_active)
-            MASKED_MUTANTS = deepcopy(before_masked)
-            res = f(*args, **kwargs)
-            after_active = deepcopy(ACTIVE_MUTANTS)
-            after_masked = deepcopy(MASKED_MUTANTS)
-            logger.debug('wrapped: %s(%s %s) -> %s (%s)', f.__name__, args, kwargs, res, type(res))
-            new_active = (after_active or set()) - (before_active or set())
-            new_masked = after_masked - before_masked
-            
-            logger.debug("masked: %s %s %s", before_masked, after_masked, new_masked)
-            logger.debug("active: %s %s %s", before_active, after_active, new_active)
-            if type(res) != ShadowVariable:
-                assert LOGICAL_PATH not in tainted_return, f"{LOGICAL_PATH} {tainted_return}"
-                tainted_return[LOGICAL_PATH] = res
-
-                if new_active:
-                    assert LOGICAL_PATH in new_active, new_active
-
-                    for path in after_active or set():
-                        # already recorded the LOGICAL_PATH result before the loop
-                        if path == LOGICAL_PATH:
-                            continue
-                        assert path not in tainted_return, f"{path} {tainted_return}"
-                        tainted_return[path] = res
-            elif type(res) == ShadowVariable:
-                shadow = get_active(res._shadow)
-                unused_active = new_active
-
-                if LOGICAL_PATH in shadow:
-                    unused_active.discard(LOGICAL_PATH)
-                    log_res = shadow[LOGICAL_PATH]
-                else:
-                    log_res = shadow[MAINLINE]
-
-                if LOGICAL_PATH in tainted_return:
-                    assert tainted_return[LOGICAL_PATH] == log_res, f"{tainted_return[LOGICAL_PATH]} == {log_res}"
-                else:
-                    tainted_return[LOGICAL_PATH] = log_res
-
-                for path, val in shadow.items():
-                    if path == MAINLINE or path == LOGICAL_PATH or path in new_masked:
-                        continue
-                    if path in tainted_return:
-                        assert tainted_return[path] == val, f"{tainted_return[path]} == {val}"
-                    else:
-                        tainted_return[path] = val
-                    unused_active.discard(path)
-                    done_paths.add(path)
-                
-                for path in unused_active:
-                    tainted_return[path] = shadow[MAINLINE]
-                    done_paths.add(path)
-
-            # logger.debug(f"cur return {tainted_return}")
-
-            done_paths |= new_active
-            done_paths.add(LOGICAL_PATH)
-            remaining_paths |= new_masked
-            remaining_paths -= done_paths
-
-        LOGICAL_PATH = MAINLINE
-        ACTIVE_MUTANTS = before_active
-        MASKED_MUTANTS = before_masked
-
-        logger.debug("return: %s", tainted_return)
-
-        # If only mainline in return value untaint it
-        if len(tainted_return) == 1:
-            assert MAINLINE in tainted_return, f"{tainted_return}"
-            res = tainted_return[MAINLINE]
-            return res
-
-        res = t_combine(tainted_return)
-        return res
+        if FORKING_CONTEXT:
+            return fork_wrap(f, *args, **kwargs)
+        else:
+            return no_fork_wrap(f, *args, **kwargs)
 
     return flow_wrapper
 
@@ -626,7 +698,7 @@ def split_assert(cmp_result):
 
 
 def t_assert(cmp_result):
-    if EXECUTION_MODE in [ExecutionMode.SHADOW]:
+    if EXECUTION_MODE in [ExecutionMode.SHADOW, ExecutionMode.SHADOW_FORK]:
         shadow_assert(cmp_result)
     elif EXECUTION_MODE in [ExecutionMode.SPLIT_STREAM, ExecutionMode.MODULO_EQV]:
         split_assert(cmp_result)
@@ -709,17 +781,9 @@ ALLOWED_DUNDER_METHODS = {
         '__add__', '__and__', '__div__', '__truediv__', '__divmod__', '__eq__', 
         '__ne__', '__le__', '__len__', 
         '__ge__', '__gt__', '__sub__', '__lt__', '__mul__', 
+        '__radd__', '__rmul__', '__rmod__',
     ],
 }
-
-RIGHT_DUNDER_METHODS = [
-    # ('__radd__', '__add__'),
-    # ('__rmul__', '__mul__'),
-    # ('__rmod__', '__mod__'),
-    '__radd__',
-    '__rmul__',
-    '__rmod__',
-]
 
 DISALLOWED_DUNDER_METHODS = [
     '__aenter__', '__aexit__', '__aiter__', '__anext__', '__await__',
@@ -757,19 +821,11 @@ class ShadowVariable():
         return self._do_unary_op("{method}", *args, **kwargs)
         """.strip())
 
+    # self.{method} = lambda other, *args, **kwargs: self._do_bool_op(other, *args, **kwargs)
     for method in ALLOWED_DUNDER_METHODS['bool_ops']:
         exec(f"""
     def {method}(self, other, *args, **kwargs):
         assert len(args) == 0 and len(kwargs) == 0, f"{{len(args)}} == 0 and {{len(kwargs)}} == 0"
-        return self._do_bool_op(other, "{method}", *args, **kwargs)
-        """.strip())
-
-    # swith self with other to get the correct result when redirecting to original method
-        # logger.debug(f"redirected {from_method} to {to_method}")
-    for method in RIGHT_DUNDER_METHODS:
-        exec(f"""
-    def {method}(self, other, *args, **kwargs):
-        # assert len(args) == 0 and len(kwargs) == 0, f"{{len(args)}} == 0 and {{len(kwargs)}} == 0"
         return self._do_bool_op(other, "{method}", *args, **kwargs)
         """.strip())
 
@@ -808,7 +864,7 @@ class ShadowVariable():
     #     raise NotImplementedError()
 
     def __repr__(self):
-        return f"sv:{self._shadow}"
+        return f"ShadowVariable({self._shadow})"
 
     def _get_paths(self):
         return self._shadow.keys()
@@ -852,7 +908,7 @@ class ShadowVariable():
 
     def _do_bool_op(self, other, op, *args, **kwargs):
 
-        logger.debug("op: %s %s %s", self, other, op)
+        # logger.debug("op: %s %s %s", self, other, op)
         self_shadow = self._shadow
         if type(other) == ShadowVariable:
             other_shadow = other._shadow

@@ -17,7 +17,9 @@ $(SUBJECTS): | tmp
 
 
 dev:
-	EXECUTION_MODE=shadow python3 tmp/prime/shadow_execution.py
+	# TRACE=1 python3 tmp/prime/traditional_1.py
+	EXECUTION_MODE=split GATHER_ATEXIT=1 TRACE=1 python3 tmp/prime/split_stream.py
+	# EXECUTION_MODE=shadow_fork TRACE=1 python3 tmp/prime/shadow_execution.py
 
 test:
 	pytest --log-cli-level=DEBUG --log-format="%(levelname)s %(process)d %(message)s"

@@ -16,6 +16,7 @@ def run_it(path, mode=None, logical_path=None, result_file=None, should_not_prin
     if mode is not None:
         env['EXECUTION_MODE'] = mode
     env['TRACE'] = "1"
+    env['GATHER_ATEXIT'] = '1'
     res = run(['python3', path], stdout=PIPE, stderr=STDOUT, env=env)
     if res.returncode != 0 and not should_not_print:
         print(f"{res.args} => {res.returncode}")
@@ -98,24 +99,31 @@ def main():
         extract_data(get_res(Path(args.dir)/"shadow_execution.py", 'shadow'))
     print(shadow_killed, shadow_mode, shadow_subj_count, shadow_tool_count)
 
+    sf_killed, sf_mode, sf_subj_count, sf_tool_count, sf_line_count = \
+        extract_data(get_res(Path(args.dir)/"shadow_execution.py", 'shadow_fork'))
+    print(sf_killed, sf_mode, sf_subj_count, sf_tool_count)
+
 
     all_lines = subject_line_ctr.keys() | ss_line_count.keys() | modulo_line_count.keys() | shadow_line_count.keys()
     trad_c_total = 0
     ss_c_total = 0
     modulo_c_total = 0
     shadow_c_total = 0
+    sf_c_total = 0
     for ll in sorted(all_lines):
         trad_c = subject_line_ctr.get(ll, 0)
         ss_c = ss_line_count.get(ll, 0)
         modulo_c = modulo_line_count.get(ll, 0)
         shadow_c = shadow_line_count.get(ll, 0)
+        sf_c = sf_line_count.get(ll, 0)
 
         trad_c_total += trad_c
         ss_c_total += ss_c
         modulo_c_total += modulo_c
         shadow_c_total += shadow_c
+        sf_c_total += sf_c
 
-        print(f"{ll}: {trad_c:10} {ss_c:10} {modulo_c:10} {shadow_c:10}")
+        print(f"{ll}: {trad_c:10} {ss_c:10} {modulo_c:10} {shadow_c:10} {sf_c:10}")
 
 
     assert trad_killed == split_stream_killed
@@ -130,6 +138,7 @@ def main():
     assert ss_c_total == split_stream_subj_count
     assert modulo_c_total == modulo_subj_count
     assert shadow_c_total == shadow_subj_count
+    assert sf_c_total == sf_subj_count
 
 
 
