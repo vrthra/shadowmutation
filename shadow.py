@@ -46,6 +46,7 @@ IGNORE_FILES = set([
     "abc.py",
     "os.py",
     "re.py",
+    "warnings.py",
     "sre_compile.py",
     "sre_parse.py",
     "functools.py",
@@ -113,7 +114,7 @@ def trace_func(frame, event, arg):
         # logger.debug(f"tool: {fname_sub.name} {frame.f_code.co_name} {frame.f_code.co_firstlineno}")
         TOOL_COUNTER += 1
     else:
-        logger.debug(f"subject: {fname_sub.name} {frame.f_code.co_name} {frame.f_lineno}")
+        # logger.debug(f"subject: {fname_sub.name} {frame.f_code.co_name} {frame.f_lineno}")
         SUBJECT_COUNTER_DICT[(fname_sub.name, frame.f_lineno)] += 1
         SUBJECT_COUNTER += 1
 
@@ -779,12 +780,12 @@ def t_combine(mutations: dict[int, Any]) -> Any:
 # tainted types
 
 ALLOWED_DUNDER_METHODS = {
-    'unary_ops': ['__abs__', '__round__', ],
+    'unary_ops': ['__abs__', '__round__', '__neg__', ],
     'bool_ops': [
-        '__add__', '__and__', '__div__', '__truediv__', '__divmod__', '__eq__', 
-        '__ne__', '__le__', '__len__', 
+        '__add__', '__and__', '__div__', '__truediv__', '__rtruediv__', '__divmod__', '__eq__', 
+        '__ne__', '__le__', '__len__', '__pow__', 
         '__ge__', '__gt__', '__sub__', '__lt__', '__mul__', 
-        '__radd__', '__rmul__', '__rmod__',
+        '__radd__', '__rmul__', '__rmod__', 
     ],
 }
 
@@ -797,11 +798,11 @@ DISALLOWED_DUNDER_METHODS = [
     '__hash__', '__import__', '__imul__', '__index__',
     '__int__', '__invert__',
     '__ior__', '__iter__', '__ixor__', '__lshift__', 
-    '__mod__', '__neg__', '__next__', '__nonzero__',
-    '__or__', '__pos__', '__pow__', '__prepare__', '__rand__', '__rdiv__',
+    '__mod__', '__next__', '__nonzero__',
+    '__or__', '__pos__', '__prepare__', '__rand__', '__rdiv__',
     '__rdivmod__', '__reduce__', '__reduce_ex__', '__repr__', '__reversed__', '__rfloordiv__',
     '__rlshift__', '__ror__', '__rpow__', '__rrshift__',
-    '__rshift__', '__rsub__', '__rtruediv__', '__rxor__', '__set__', '__setitem__',
+    '__rshift__', '__rsub__', '__rxor__', '__set__', '__setitem__',
     '__setslice__', '__sizeof__', '__subclasscheck__', '__subclasses__',
     '__xor__', 
 
@@ -903,6 +904,7 @@ class ShadowVariable():
                 k_res = context(left(k), right(k), op)
             except AttributeError:
                 try_right_side = True
+                k_res = None
             except ZeroDivisionError:
                 STRONGLY_KILLED.add(k)
                 continue
@@ -918,13 +920,16 @@ class ShadowVariable():
                 except AttributeError:
                     STRONGLY_KILLED.add(k)
                     continue
+                if k_res == NotImplemented:
+                    STRONGLY_KILLED.add(k)
+                    continue
 
             res[k] = k_res
 
         return res
 
     def _do_unary_op(self, op, *args, **kwargs):
-        logger.debug("op: %s %s", self, op)
+        # logger.debug("op: %s %s", self, op)
         self_shadow = self._shadow
         # res = self._do_op_safely(self_shadow.keys(), lambda k: self_shadow[k].__getattribute__(op)(*args, **kwargs))
         res = self._do_op_safely(
@@ -938,7 +943,7 @@ class ShadowVariable():
 
     def _do_bool_op(self, other, op, *args, **kwargs):
 
-        logger.debug("op: %s %s %s", self, other, op)
+        # logger.debug("op: %s %s %s", self, other, op)
         self_shadow = self._shadow
         if type(other) == ShadowVariable:
             other_shadow = other._shadow
