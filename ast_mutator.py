@@ -470,9 +470,9 @@ def main():
     # generate_traditional_prepared = partial(generate_traditional_mutation, args.source, result_dir, args.ignore)
     # with Pool() as pool:
     #     for mut, keep, mypy_result in pool.imap_unordered(generate_traditional_prepared, mutations):
-    for mut in mutations:
+    for mut in mutations + [0]: # + [0] to include the unmutated version
         mut, keep, mypy_result = generate_traditional_mutation(args.source, result_dir, args.ignore, mut)
-        if keep:
+        if keep and mut != 0:
             # print(f"Keeping mutation: {mut}")
             filtered_mutations.append(mut)
         else:
