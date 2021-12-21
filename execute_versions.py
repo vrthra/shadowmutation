@@ -8,6 +8,7 @@ from pathlib import Path
 
 
 def run_it(path, mode=None, logical_path=None, result_file=None, should_not_print=False):
+    # print(path)
     env = deepcopy(os.environ)
     if logical_path is not None:
         env['LOGICAL_PATH'] = str(logical_path)

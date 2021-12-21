@@ -12,13 +12,17 @@ def prime(input: int) -> bool:
         return False
     if input == 2:
         return True
+    ctr = 0
     n = 2
     while True:
+        if ctr >= 100:
+            break
         if n >= input:
             break
         if input % n == 0:
             return False
-        n += 1
+        n = n + 1
+        ctr = ctr + 1
     return True
 
 

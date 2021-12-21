@@ -5,7 +5,11 @@ def caesar(string: List[int], key: int, decode: bool = False) -> List[int]:
 		key = 26 - key
 	res = []
 	for c in string:
-		c_res = ((c - 65 + key) % 26) + 65
+		# c_res = ((c - 65 + key) % 26) + 65
+		c_res = c - 65
+		c_res = c_res + key
+		c_res = c_res % 26
+		c_res = c_res + 65
 		res.append(c_res)
 
 	return res

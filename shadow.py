@@ -415,6 +415,13 @@ def t_gather_results() -> Any:
     return results
 
 
+def t_final_exception() -> None:
+    # Program is crashing, mark all active mutants as strongly killed
+    for mut in ACTIVE_MUTANTS:
+        STRONGLY_KILLED.add(mut)
+    t_gather_results()
+
+
 def t_get_logical_path():
     return LOGICAL_PATH
 
@@ -423,6 +430,7 @@ def fork_wrap(f, *args, **kwargs):
     global FORKING_CONTEXT
     global ACTIVE_MUTANTS
     global MASKED_MUTANTS
+    global STRONGLY_KILLED
     old_forking_context = FORKING_CONTEXT
     old_active_mutants = deepcopy(ACTIVE_MUTANTS)
     old_masked_mutants = deepcopy(MASKED_MUTANTS)
@@ -430,7 +438,10 @@ def fork_wrap(f, *args, **kwargs):
     FORKING_CONTEXT = Forker()
     try:
         res = f(*args, **kwargs)
-    except Exception:
+    except Exception as e:
+        # logger.info(f"Exception in wrapped function: {e}")
+        # for mut in ACTIVE_MUTANTS:
+        #     STRONGLY_KILLED.add(mut)
         raise NotImplementedError("Exceptions in wrapped functions are not supported.")
     combined_results = FORKING_CONTEXT.wait_for_forks(fork_res=res)
 
@@ -506,8 +517,10 @@ def no_fork_wrap(f, *args, **kwargs):
                     # already recorded the LOGICAL_PATH result before the loop
                     if path == LOGICAL_PATH:
                         continue
-                    assert path not in tainted_return, f"{path} {tainted_return}"
-                    tainted_return[path] = res
+                    if path in tainted_return:
+                        tainted_return[path] == res
+                    else:
+                        tainted_return[path] = res
         elif type(res) == ShadowVariable:
             shadow = get_active(res._shadow)
             unused_active = new_active
@@ -793,9 +806,12 @@ ALLOWED_DUNDER_METHODS = {
     'unary_ops': ['__abs__', '__round__', '__neg__', ],
     'bool_ops': [
         '__add__', '__and__', '__div__', '__truediv__', '__rtruediv__', '__divmod__', '__eq__', 
-        '__ne__', '__le__', '__len__', '__pow__', '__mod__', 
-        '__ge__', '__gt__', '__sub__', '__lt__', '__mul__', 
-        '__radd__', '__rmul__', '__rmod__', 
+        '__ne__', '__le__', '__len__', '__pow__', '__mod__', '__floordiv__', 
+        '__ge__', '__gt__', '__sub__', '__lt__', '__mul__', '__lshift__', '__rshift__', 
+        '__or__', '__xor__', '__rand__', 
+        '__radd__', '__rmul__', '__rmod__',  '__rfloordiv__', '__rsub__', '__rxor__',
+        '__rlshift__', '__rrshift__', '__ror__', 
+
     ],
 }
 
@@ -803,18 +819,17 @@ DISALLOWED_DUNDER_METHODS = [
     '__aenter__', '__aexit__', '__aiter__', '__anext__', '__await__',
     '__bytes__', '__call__', '__class__', '__cmp__', '__complex__', '__contains__',
     '__delattr__', '__delete__', '__delitem__', '__delslice__', '__dir__', 
-    '__enter__', '__exit__', '__floordiv__', '__fspath__',
+    '__enter__', '__exit__', '__fspath__',
     '__get__', '__getitem__', '__getnewargs__', '__getslice__', 
     '__hash__', '__import__', '__imul__', '__index__',
     '__int__', '__invert__',
-    '__ior__', '__iter__', '__ixor__', '__lshift__', 
+    '__ior__', '__iter__', '__ixor__', 
     '__next__', '__nonzero__',
-    '__or__', '__pos__', '__prepare__', '__rand__', '__rdiv__',
-    '__rdivmod__', '__reduce__', '__reduce_ex__', '__repr__', '__reversed__', '__rfloordiv__',
-    '__rlshift__', '__ror__', '__rpow__', '__rrshift__',
-    '__rshift__', '__rsub__', '__rxor__', '__set__', '__setitem__',
+    '__pos__', '__prepare__', '__rdiv__',
+    '__rdivmod__', '__reduce__', '__reduce_ex__', '__repr__', '__reversed__',
+    '__rpow__', '__set__', '__setitem__',
     '__setslice__', '__sizeof__', '__subclasscheck__', '__subclasses__',
-    '__xor__', 
+    
 
     # python enforces that the specific type is returned,
     # to my knowledge we cannot override these dunders to return

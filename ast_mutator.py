@@ -16,6 +16,7 @@ TAINT_MEMBERS = [
     "t_wrap",
     "t_combine",
     "t_gather_results",
+    "t_final_exception",
     "t_cond",
     "t_assert",
 ]
@@ -230,34 +231,42 @@ def f():
     def visit_Assign(self, node):
         global mutation_counter
         node = self.generic_visit(node)
-
-        # do not mutate list assignments (var = [])
-        if type(node.value) == ast.List:
-            return node
-
-        if self.mode.is_split_stream() or self.mode.is_shadow():
-            mut_container = MutContainer()
-            mut_container.add(0, node.value)
-
-        for mutation in [
-            # "right != 1",
-            "right + 1",
-            "right * 2",
-        ]:
-            cur_mut_ctr = self.mutation_counter.get()
-            mutation = ast.parse(mutation)
-            if self.mode.is_traditional() and self.mode.mut_is_active(cur_mut_ctr):
-                mutation = apply(ReplaceNameTransformer("right", node.value), mutation.body[0].value)
-                node.value = mutation
-            elif (self.mode.is_split_stream() or self.mode.is_shadow()) and self.mode.mut_is_active(cur_mut_ctr):
-                mutation = apply(ReplaceNameTransformer("right", deepcopy(node.value)), mutation.body[0].value)
-                mut_container.add(cur_mut_ctr, mutation)
-            self.mutations.append(cur_mut_ctr)
-
-        if self.mode.is_split_stream() or self.mode.is_shadow():
-            node.value = mut_container.finalize()
-
         return node
+
+        # # do not mutate list assignments (var = [])
+        # if type(node.value) == ast.List:
+        #     return node
+
+        # if type(node.value) == ast.Call and node.value.func.id == "t_combine":
+        #     assign_is_mutated = True
+        # else:
+        #     assign_is_mutated = False
+
+        # if self.mode.is_split_stream() or self.mode.is_shadow():
+        #     mut_container = MutContainer()
+        #     mut_container.add(0, node.value)
+
+        # for mutation in [
+        #     # "right != 1",
+        #     "right + 1",
+        #     "right * 2",
+        # ]:
+        #     cur_mut_ctr = self.mutation_counter.get()
+        #     if assign_is_mutated:
+        #         continue
+        #     mutation = ast.parse(mutation)
+        #     if self.mode.is_traditional() and self.mode.mut_is_active(cur_mut_ctr):
+        #         mutation = apply(ReplaceNameTransformer("right", node.value), mutation.body[0].value)
+        #         node.value = mutation
+        #     elif (self.mode.is_split_stream() or self.mode.is_shadow()) and self.mode.mut_is_active(cur_mut_ctr):
+        #         mutation = apply(ReplaceNameTransformer("right", deepcopy(node.value)), mutation.body[0].value)
+        #         mut_container.add(cur_mut_ctr, mutation)
+        #     self.mutations.append(cur_mut_ctr)
+
+        # if not assign_is_mutated and (self.mode.is_split_stream() or self.mode.is_shadow()):
+        #     node.value = mut_container.finalize()
+
+        # return node
 
     def visit_Compare(self, node):
         node = self.generic_visit(node)
@@ -291,10 +300,44 @@ def f():
 
     def visit_BinOp(self, node):
         node = self.generic_visit(node)
+
+        # # change the operator:
+        # #   left + right
+        # # to:
+        op = node.op
+        mutations = [
+            None if type(op) == ast.Add      else "left + right",
+            None if type(op) == ast.Sub      else "left - right",
+            None if type(op) == ast.Mult     else "left * right",
+            # None if type(op) == ast.Div      else "left / right",
+            # None if type(op) == ast.Mod      else r"left % right",
+            # None if type(op) == ast.Pow      else "left ** right",
+            None if type(op) == ast.LShift   else "left << right",
+            None if type(op) == ast.RShift   else "left >> right",
+            None if type(op) == ast.BitOr    else "left | right",
+            None if type(op) == ast.BitXor   else "left ^ right",
+            None if type(op) == ast.BitAnd   else "left & right",
+            # None if type(op) == ast.FloorDiv else "left // right",
+        ]
+        
+        variables = [
+            Variable("left", lambda x: x.left, set_attribute("left")),
+            Variable("right", lambda x: x.right, set_attribute("right")),
+        ]
+
+        node = self._apply_mutations(node, lambda x: x.value, mutations, variables)
+
         return node
+
+
+    def visit_AnnAssign(self, node):
+        adbg(node)
+        raise NotImplementedError()
         
 
-    # def visit_AugAssign(self, node):
+    def visit_AugAssign(self, node):
+        adbg(node)
+        raise NotImplementedError()
     #     node = self.generic_visit(node)
     #     def change_to_tainted_call(call_id):
     #         global mutation_counter
@@ -399,6 +442,21 @@ def generate_traditional_mutation(path, res_dir, function_ignore_regex, mut) -> 
     return mut, True, mypy_result
 
 
+def wrap_final_call(tree):
+    final_call = tree.body[-1].value
+    assert type(final_call) == ast.Call and len(final_call.args) == 0 and len(final_call.keywords) == 0
+    wrapper = ast.parse("""
+try:
+    call()
+except Exception as e:
+    t_final_exception()
+    raise e
+                """).body[0]
+    wrapper.body[0].value = final_call
+    tree.body[-1] = wrapper
+    return tree
+
+
 def generate_split_stream(path, res_dir, function_ignore_regex, mutations):
     # first collect all possible mutations
     mode = Mode("split-stream", mutations)
@@ -407,6 +465,7 @@ def generate_split_stream(path, res_dir, function_ignore_regex, mutations):
     tree.body.insert(0, ast.parse(f'from shadow import {", ".join(TAINT_MEMBERS)}').body[0])
     tree = ast.fix_missing_locations(ShadowExecutionTransformer(mode, function_ignore_regex).visit(tree))
     tree = ast.fix_missing_locations(AssertTransformer().visit(tree))
+    tree = wrap_final_call(tree)
 
     res_path = res_dir/f"split_stream.py"
 
