@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 
 MAINLINE = 0
 LOGICAL_PATH = 0
+
+LAST_TRACED_LINE = None
 SUBJECT_COUNTER = 0
 TOOL_COUNTER = 0
 SUBJECT_COUNTER_DICT = None
@@ -79,6 +81,7 @@ def reset_lines():
 
 
 def trace_func(frame, event, arg):
+    global LAST_TRACED_LINE
     global SUBJECT_COUNTER
     global SUBJECT_COUNTER_DICT
     global TOOL_COUNTER
@@ -110,12 +113,19 @@ def trace_func(frame, event, arg):
     if not (is_subject_file or is_tool_file):
         assert False, f"Unknown file: {fname}"
 
+
     if is_tool_file:
         # logger.debug(f"tool: {fname_sub.name} {frame.f_code.co_name} {frame.f_code.co_firstlineno}")
         TOOL_COUNTER += 1
     else:
+        cur_line = (fname_sub.name, frame.f_lineno)
+        # logger.debug(f"{cur_line} {LAST_TRACED_LINE}")
+        if cur_line == LAST_TRACED_LINE:
+            return trace_func
+        LAST_TRACED_LINE = cur_line
+
         # logger.debug(f"subject: {fname_sub.name} {frame.f_code.co_name} {frame.f_lineno}")
-        SUBJECT_COUNTER_DICT[(fname_sub.name, frame.f_lineno)] += 1
+        SUBJECT_COUNTER_DICT[cur_line] += 1
         SUBJECT_COUNTER += 1
 
     return trace_func
@@ -896,27 +906,35 @@ class ShadowVariable():
 
     def _do_op_safely(self, paths, left, right, op, context):
         global STRONGLY_KILLED
-        try_right_side = False
+        try_other_side = False
         
         res = {}
         for k in paths:
             try:
                 k_res = context(left(k), right(k), op)
             except AttributeError:
-                try_right_side = True
+                try_other_side = True
                 k_res = None
             except ZeroDivisionError:
                 STRONGLY_KILLED.add(k)
                 continue
 
             if k_res == NotImplemented:
-                try_right_side = True
+                try_other_side = True
 
-            if try_right_side:
-                # try right side application as well left.__sub__(right) -> right.__rsub__(left)
-                r_op = op[:2] + "r" + op[2:]
+            if try_other_side:
+                # try other side application as well
+                # left.__sub__(right) -> right.__rsub__(left)
+                # or
+                # left.__rsub__(right) -> right.__sub__(left)
+                if op[:3] == "__r":
+                    # remove r
+                    other_op = op[:2] + op[3:]
+                else:
+                    # add r
+                    other_op = op[:2] + "r" + op[2:]
                 try:
-                    k_res = context(right(k), left(k), r_op)
+                    k_res = context(right(k), left(k), other_op)
                 except AttributeError:
                     STRONGLY_KILLED.add(k)
                     continue

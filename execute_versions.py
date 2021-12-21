@@ -123,7 +123,7 @@ def main():
         shadow_c_total += shadow_c
         sf_c_total += sf_c
 
-        print(f"{ll}: {trad_c:10} {ss_c:10} {modulo_c:10} {shadow_c:10} {sf_c:10}")
+        print(f"{ll:4}: {trad_c:10} {ss_c:10} {modulo_c:10} {shadow_c:10} {sf_c:10}")
 
 
     assert trad_killed == split_stream_killed
