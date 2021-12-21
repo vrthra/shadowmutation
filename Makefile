@@ -5,7 +5,7 @@ export PYTHONPATH := $(shell pwd):$(PYTHONPATH)
 EXAMPLES := $(wildcard examples/*.py)
 SUBJECTS := $(notdir $(EXAMPLES:.py=))
 
-all: $(SUBJECTS)
+all: clean test $(SUBJECTS)
 
 clean:
 	rm -rf tmp
@@ -22,7 +22,7 @@ dev:
 	# EXECUTION_MODE=shadow_fork TRACE=1 python3 tmp/prime/shadow_execution.py
 
 test:
-	pytest --log-cli-level=DEBUG --log-format="%(levelname)s %(process)d %(message)s"
+	pytest --log-cli-level=WARNING --log-format="%(levelname)s %(process)d %(message)s"
 
 
 tmp:

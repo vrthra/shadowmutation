@@ -714,12 +714,15 @@ def untaint(obj):
 
 def combine_split_stream(mutations):
     global ACTIVE_MUTANTS
+    global MASKED_MUTANTS
     if LOGICAL_PATH == MAINLINE:
+        all_muts = set(mutations.keys())
         for mut_id, val in mutations.items():
             if mut_id in [MAINLINE, LOGICAL_PATH]:
                 continue
             if FORKING_CONTEXT.maybe_fork(mut_id):
                 ACTIVE_MUTANTS = set([mut_id])
+                MASKED_MUTANTS = all_muts - ACTIVE_MUTANTS
                 return val
     try:
         return mutations[LOGICAL_PATH]
@@ -776,7 +779,7 @@ def t_combine(mutations: dict[int, Any]) -> Any:
 # tainted types
 
 ALLOWED_DUNDER_METHODS = {
-    'unary_ops': ['__bool__', '__abs__', '__round__', ],
+    'unary_ops': ['__abs__', '__round__', ],
     'bool_ops': [
         '__add__', '__and__', '__div__', '__truediv__', '__divmod__', '__eq__', 
         '__ne__', '__le__', '__len__', 
@@ -789,7 +792,7 @@ DISALLOWED_DUNDER_METHODS = [
     '__aenter__', '__aexit__', '__aiter__', '__anext__', '__await__',
     '__bytes__', '__call__', '__class__', '__cmp__', '__complex__', '__contains__',
     '__delattr__', '__delete__', '__delitem__', '__delslice__', '__dir__', 
-    '__enter__', '__exit__', '__float__', '__floordiv__', '__fspath__',
+    '__enter__', '__exit__', '__floordiv__', '__fspath__',
     '__get__', '__getitem__', '__getnewargs__', '__getslice__', 
     '__hash__', '__import__', '__imul__', '__index__',
     '__int__', '__invert__',
@@ -801,6 +804,12 @@ DISALLOWED_DUNDER_METHODS = [
     '__rshift__', '__rsub__', '__rtruediv__', '__rxor__', '__set__', '__setitem__',
     '__setslice__', '__sizeof__', '__subclasscheck__', '__subclasses__',
     '__xor__', 
+
+    # python enforces that the specific type is returned,
+    # to my knowledge we cannot override these dunders to return
+    # a ShadowVariable
+    # disallow these dunders to avoid accidentally losing taint info
+    '__bool__', '__float__',
 ]
 
 LIST_OF_IGNORED_DUNDER_METHODS = [
@@ -884,31 +893,52 @@ class ShadowVariable():
         for k in killed:
             del shadow[k]
 
-    def _do_op_safely(self, paths, op):
+    def _do_op_safely(self, paths, left, right, op, context):
         global STRONGLY_KILLED
+        try_right_side = False
         
         res = {}
         for k in paths:
             try:
-                res[k] = op(k)
+                k_res = context(left(k), right(k), op)
             except AttributeError:
-                STRONGLY_KILLED.add(k)
+                try_right_side = True
             except ZeroDivisionError:
                 STRONGLY_KILLED.add(k)
-                res[k] = None
+                continue
+
+            if k_res == NotImplemented:
+                try_right_side = True
+
+            if try_right_side:
+                # try right side application as well left.__sub__(right) -> right.__rsub__(left)
+                r_op = op[:2] + "r" + op[2:]
+                try:
+                    k_res = context(right(k), left(k), r_op)
+                except AttributeError:
+                    STRONGLY_KILLED.add(k)
+                    continue
+
+            res[k] = k_res
 
         return res
 
     def _do_unary_op(self, op, *args, **kwargs):
-        # logger.debug("op: %s %s %s", self, other, op)
+        logger.debug("op: %s %s", self, op)
         self_shadow = self._shadow
-        res = self._do_op_safely(self_shadow.keys(), lambda k: self_shadow[k].__getattribute__(op)(*args, **kwargs))
+        # res = self._do_op_safely(self_shadow.keys(), lambda k: self_shadow[k].__getattribute__(op)(*args, **kwargs))
+        res = self._do_op_safely(
+            self_shadow.keys(),
+            lambda k: self_shadow[k],
+            lambda k: None,
+            op,
+            lambda left, right, op: left.__getattribute__(op)(*args, **kwargs))
         # logger.debug("res: %s %s", res, type(res[0]))
         return ShadowVariable(res)
 
     def _do_bool_op(self, other, op, *args, **kwargs):
 
-        # logger.debug("op: %s %s %s", self, other, op)
+        logger.debug("op: %s %s %s", self, other, op)
         self_shadow = self._shadow
         if type(other) == ShadowVariable:
             other_shadow = other._shadow
@@ -919,27 +949,38 @@ class ShadowVariable():
             common_shadows = {k for k in self_shadow if k in other_shadow}
             vs_ = self._do_op_safely(
                 (k for k in self_shadow if k not in other_shadow),
-                lambda k: self_shadow[k].__getattribute__(op)(other_main, *args, **kwargs)
+                lambda k: self_shadow[k],
+                lambda k: other_main,
+                op,
+                lambda left, right, op: left.__getattribute__(op)(right, *args, **kwargs)
             )
             vo_ = self._do_op_safely(
                 (k for k in other_shadow if k not in self_shadow),
-                lambda k: other_shadow[k].__getattribute__(op)(self_main, *args, **kwargs)
+                lambda k: other_shadow[k],
+                lambda k: self_main,
+                op,
+                lambda left, right, op: left.__getattribute__(op)(right, *args, **kwargs)
             )
 
             # if there was a preexisint taint of the same name, this mutation was
             # already executed. So, use that value.
             cs_ = self._do_op_safely(
                 common_shadows,
-                lambda k: self_shadow[k].__getattribute__(op)(other_shadow[k], *args, **kwargs)
+                lambda k: self_shadow[k],
+                lambda k: other_shadow[k],
+                op,
+                lambda left, right, op: left.__getattribute__(op)(right, *args, **kwargs)
             )
             res = {**vs_, **vo_, **cs_}
             # logger.debug("res: %s", res)
             return ShadowVariable(res)
         else:
-            res = { k: self_shadow[k].__getattribute__(op)(other, *args, **kwargs) for k in self_shadow }
             res = self._do_op_safely(
                 self_shadow.keys(),
-                lambda k: self_shadow[k].__getattribute__(op)(other, *args, **kwargs)
+                lambda k: self_shadow[k],
+                lambda k: other,
+                op,
+                lambda left, right, op: left.__getattribute__(op)(right, *args, **kwargs)
             )
             # logger.debug("res: %s %s", res, type(res[0]))
             return ShadowVariable(res)
