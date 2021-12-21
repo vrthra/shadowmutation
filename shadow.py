@@ -793,7 +793,7 @@ ALLOWED_DUNDER_METHODS = {
     'unary_ops': ['__abs__', '__round__', '__neg__', ],
     'bool_ops': [
         '__add__', '__and__', '__div__', '__truediv__', '__rtruediv__', '__divmod__', '__eq__', 
-        '__ne__', '__le__', '__len__', '__pow__', 
+        '__ne__', '__le__', '__len__', '__pow__', '__mod__', 
         '__ge__', '__gt__', '__sub__', '__lt__', '__mul__', 
         '__radd__', '__rmul__', '__rmod__', 
     ],
@@ -808,7 +808,7 @@ DISALLOWED_DUNDER_METHODS = [
     '__hash__', '__import__', '__imul__', '__index__',
     '__int__', '__invert__',
     '__ior__', '__iter__', '__ixor__', '__lshift__', 
-    '__mod__', '__next__', '__nonzero__',
+    '__next__', '__nonzero__',
     '__or__', '__pos__', '__prepare__', '__rand__', '__rdiv__',
     '__rdivmod__', '__reduce__', '__reduce_ex__', '__repr__', '__reversed__', '__rfloordiv__',
     '__rlshift__', '__ror__', '__rpow__', '__rrshift__',

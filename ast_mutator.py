@@ -231,6 +231,10 @@ def f():
         global mutation_counter
         node = self.generic_visit(node)
 
+        # do not mutate list assignments (var = [])
+        if type(node.value) == ast.List:
+            return node
+
         if self.mode.is_split_stream() or self.mode.is_shadow():
             mut_container = MutContainer()
             mut_container.add(0, node.value)
