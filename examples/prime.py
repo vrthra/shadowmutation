@@ -1,4 +1,15 @@
 
+def get_modulo() -> int:
+    a = 0
+    a = a + 0
+    return a
+
+
+def check_max_runtime(n: int) -> bool:
+    if n >= 100:
+        return True
+    return False
+
 
 def prime(input: int) -> bool:
     """
@@ -15,13 +26,15 @@ def prime(input: int) -> bool:
     ctr = 0
     n = 2
     while True:
-        if ctr >= 100:
-            break
         if n >= input:
             break
-        if input % n == 0:
+        modulo_by = get_modulo()
+        modulo = input % n
+        if modulo == modulo_by:
             return False
         n = n + 1
+        if check_max_runtime(ctr):
+            break
         ctr = ctr + 1
     return True
 

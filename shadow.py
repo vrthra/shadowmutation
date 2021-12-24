@@ -2,9 +2,11 @@
 # This file requires too much metaprogramming to provide correct typing for mypy.
 
 from json.decoder import JSONDecodeError
+import pickle
 import os
 import sys
 import json
+import tempfile
 import time
 import atexit
 from collections import Counter
@@ -21,7 +23,7 @@ from contextlib import contextmanager
 
 import logging
 from typing import Union
-logging.basicConfig(stream=sys.stdout, level=logging.DEBUG, format='%(process)d %(levelname)s %(message)s')
+logging.basicConfig(stream=sys.stdout, level=logging.DEBUG, format='%(process)d %(filename)s:%(lineno)s %(levelname)s %(message)s')
 logger = logging.getLogger(__name__)
 
 MAINLINE = 0
@@ -30,7 +32,9 @@ LOGICAL_PATH = 0
 LAST_TRACED_LINE = None
 SUBJECT_COUNTER = 0
 TOOL_COUNTER = 0
-SUBJECT_COUNTER_DICT = None
+SUBJECT_COUNTER_DICT = {}
+
+CACHE_PATH = None
 
 OLD_TRACE = sys.gettrace()
 
@@ -48,6 +52,7 @@ IGNORE_FILES = set([
     "abc.py",
     "os.py",
     "re.py",
+    "copyreg.py",
     "warnings.py",
     "sre_compile.py",
     "sre_parse.py",
@@ -85,6 +90,7 @@ def trace_func(frame, event, arg):
     global SUBJECT_COUNTER
     global SUBJECT_COUNTER_DICT
     global TOOL_COUNTER
+    global CACHE_PATH
 
     fname = frame.f_code.co_filename
     fname_sub = Path(fname)
@@ -111,7 +117,7 @@ def trace_func(frame, event, arg):
     is_tool_file = fname_sub_name in TOOL_FILES
     assert not (is_subject_file and is_tool_file)
     if not (is_subject_file or is_tool_file):
-        assert False, f"Unknown file: {fname}"
+        assert False, f"Unknown file: {fname}, add it to the top of shadow.py"
 
 
     if is_tool_file:
@@ -147,6 +153,8 @@ class ExecutionMode(Enum):
     MODULO_EQV = 2 # split stream + modulo equivalence pruning execution
     SHADOW = 3 # shadow types and no forking
     SHADOW_FORK = 4 # shadow and forking
+    SHADOW_CACHE = 5 # shadow types and no forking with caching
+    SHADOW_FORK_CACHE = 6 # shadow and forking with caching
 
     def get_mode(mode):
         if mode is None:
@@ -159,11 +167,20 @@ class ExecutionMode(Enum):
             return ExecutionMode.SHADOW
         elif mode == 'shadow_fork':
             return ExecutionMode.SHADOW_FORK
+        elif mode == 'shadow_cache':
+            return ExecutionMode.SHADOW_CACHE
+        elif mode == 'shadow_fork_cache':
+            return ExecutionMode.SHADOW_FORK_CACHE
         else:
             raise ValueError("Unknown Execution Mode", mode)
 
     def should_start_forker(self):
-        if self in [ExecutionMode.SPLIT_STREAM, ExecutionMode.MODULO_EQV, ExecutionMode.SHADOW_FORK]:
+        if self in [
+            ExecutionMode.SPLIT_STREAM,
+            ExecutionMode.MODULO_EQV,
+            ExecutionMode.SHADOW_FORK,
+            ExecutionMode.SHADOW_FORK_CACHE,
+        ]:
             return True
         else:
             return False
@@ -180,11 +197,13 @@ class Forker():
         self.is_parent = True
         self.sync_dir = Path(mkdtemp())
         (self.sync_dir/'paths').mkdir()
+        (self.sync_dir/'forks').mkdir()
         (self.sync_dir/'results').mkdir()
 
     def __del__(self):
         if self.is_parent:
             (self.sync_dir/'paths').rmdir()
+            (self.sync_dir/'forks').rmdir()
             (self.sync_dir/'results').rmdir()
             self.sync_dir.rmdir()
 
@@ -194,10 +213,6 @@ class Forker():
     def maybe_fork(self, path):
         global LOGICAL_PATH
 
-        # # Don't fork if current process is a child process, all forks need to depart from mainline.
-        # if not self.is_parent:
-        #     return False
-
         # Only fork once, from then on follow that path.
         path_file = self.sync_dir.joinpath('paths', str(path))
         if path_file.is_file():
@@ -206,20 +221,13 @@ class Forker():
 
         # Try to fork
         forked_pid = os.fork()
-        logger.debug(f"Forking for path: {path} got pid: {forked_pid}")
+        # logger.debug(f"Forking for path: {path} got pid: {forked_pid}")
         if forked_pid == -1:
             # Error during forking. Not much we can do.
             raise ValueError(f"Could not fork for path: {path}!")
         elif forked_pid != 0:
             # We are in parent, record the child pid and path.
             path_file.write_text(str(forked_pid))
-            # Now wait for the forked child, this minimizes the forked child processes and make
-            # this effectively single threaded.
-            try:
-                os.waitpid(forked_pid, 0)
-            except ChildProcessError as e:
-                pass
-            logger.debug(f"Counter parent: {SUBJECT_COUNTER} {TOOL_COUNTER}")
             return False
         else:
             # Update that this is the child.
@@ -227,8 +235,14 @@ class Forker():
 
             # Update which path child is supposed to follow
             LOGICAL_PATH = path
+            forked_pid = self.my_pid()
+            fork_file = self.sync_dir.joinpath('forks', str(forked_pid)) # this is used to indicate when child can start
+            while not fork_file.is_file():
+                # Wait until parent finishes.
+                time.sleep(.1)
+            fork_file.unlink()
+            logger.debug(f"Child starting for path: {path}, with pid: {forked_pid}")
             reset_lines()
-            logger.debug(f"Counter child: {SUBJECT_COUNTER} {TOOL_COUNTER}")
             return True
 
     def wait_for_forks(self, fork_res=None):
@@ -239,10 +253,9 @@ class Forker():
         if not self.is_parent:
             pid = self.my_pid()
             path = LOGICAL_PATH
-            logger.debug(f"Child with pid: {pid} and path: {path} "
-                         f"has reached sync point.")
+            # logger.debug(f"Child with pid: {pid} and path: {path} has reached sync point.")
             res_path = self.sync_dir/'results'/str(pid)
-            logger.debug(f"Writing results to: {res_path}")
+            # logger.debug(f"Writing results to: {res_path}")
             with open(res_path, 'wt') as f:
                 results = t_get_killed()
                 for res in ['strong', 'weak', 'active', 'masked']:
@@ -252,7 +265,6 @@ class Forker():
                 results['subject_count'] = SUBJECT_COUNTER
                 results['subject_count_lines'] = {'::'.join(str(a) for a in k): v for k, v in SUBJECT_COUNTER_DICT.items()}
                 results['tool_count'] = TOOL_COUNTER
-                logger.debug(f"{fork_res}")
                 if type(fork_res) == ShadowVariable:
                     results['fork_res'] = fork_res._shadow
                 else:
@@ -269,7 +281,6 @@ class Forker():
         all_results = t_get_killed()
         while True:
             is_done = True
-            time.sleep(.1)
             for path_file in (self.sync_dir/'paths').glob("*"):
                 is_done = False
                 try:
@@ -277,50 +288,56 @@ class Forker():
                 except ValueError:
                     continue
 
-                logger.debug(f"Waiting for pid: {child_pid}")
+                sync_pid_go_file = (self.sync_dir/'forks').joinpath(str(child_pid))
+                # logger.debug(f"Waiting for pid: {child_pid} {sync_pid_go_file}")
 
-                try:
-                    os.waitpid(child_pid, 0)
-                except ChildProcessError as e:
-                    if e.errno != 10:
-                        logger.debug(f"{e}")
+                # Signal that child can start.
+                sync_pid_go_file.touch()
+                while True:
+                    time.sleep(.1)
 
-                result_file = self.sync_dir/'results'/str(child_pid)
-                if result_file.is_file():
-                    with open(result_file, 'rt') as f:
-                        try:
-                            child_results = json.load(f)
-                        except JSONDecodeError:
-                            # Child has not yet written the results.
-                            continue
+                    try:
+                        os.waitpid(child_pid, 0)
+                    except ChildProcessError as e:
+                        if e.errno != 10:
+                            logger.debug(f"{e}")
 
-                    for res in ['strong', 'weak', 'active']:
-                        child_results[res] = set(child_results[res])
+                    result_file = self.sync_dir/'results'/str(child_pid)
+                    if result_file.is_file():
+                        with open(result_file, 'rt') as f:
+                            try:
+                                child_results = json.load(f)
+                            except JSONDecodeError:
+                                # Child has not yet written the results.
+                                continue
 
-                    for res in ['strong', 'weak']:
-                        add_res = child_results[res] & child_results['active']
-                        all_results[res] |= add_res
+                        for res in ['strong', 'weak', 'active']:
+                            child_results[res] = set(child_results[res])
 
-                    logger.debug(f"child results: {child_results}")
-                    SUBJECT_COUNTER += child_results['subject_count']
-                    TOOL_COUNTER += child_results['tool_count']
-                    for k, v in child_results['subject_count_lines'].items():
-                        key = k.split("::")
-                        key[1] = int(key[1])
-                        SUBJECT_COUNTER_DICT[tuple(key)] += v
+                        for res in ['strong', 'weak']:
+                            add_res = child_results[res] & child_results['active']
+                            all_results[res] |= add_res
 
-                    child_fork_res = child_results['fork_res']
-                    if type(child_fork_res) == dict:
-                        combined_fork_res.append(child_results)
-                    else:
-                        combined_fork_res.append(child_results)
+                        # logger.debug(f"child results: {child_results}")
+                        SUBJECT_COUNTER += child_results['subject_count']
+                        TOOL_COUNTER += child_results['tool_count']
+                        for k, v in child_results['subject_count_lines'].items():
+                            key = k.split("::")
+                            key[1] = int(key[1])
+                            SUBJECT_COUNTER_DICT[tuple(key)] += v
 
-                    path_file.unlink()
-                    result_file.unlink()
+                        child_fork_res = child_results['fork_res']
+                        if type(child_fork_res) == dict:
+                            combined_fork_res.append(child_results)
+                        else:
+                            combined_fork_res.append(child_results)
+
+                        path_file.unlink()
+                        result_file.unlink()
+                        break
             
             if is_done:
                 break
-        logger.debug(f"Done waiting for forks.")
         return combined_fork_res
 
 
@@ -344,6 +361,7 @@ def reinit(logical_path: str=None, execution_mode: Union[None, str]=None, no_ate
     global EXECUTION_MODE
     global FORKING_CONTEXT
     global RESULT_FILE
+    global CACHE_PATH
 
     RESULT_FILE = os.environ.get('RESULT_FILE')
 
@@ -368,6 +386,13 @@ def reinit(logical_path: str=None, execution_mode: Union[None, str]=None, no_ate
     else:
         FORKING_CONTEXT = None
 
+    if EXECUTION_MODE in [ExecutionMode.SHADOW_CACHE, ExecutionMode.SHADOW_FORK_CACHE]:
+        fd, name = tempfile.mkstemp()
+        os.close(fd)
+        CACHE_PATH = name
+    else:
+        CACHE_PATH = None
+
     if os.environ.get('GATHER_ATEXIT', '0') == '1':
         atexit.register(t_gather_results)
     else:
@@ -376,6 +401,12 @@ def reinit(logical_path: str=None, execution_mode: Union[None, str]=None, no_ate
     if os.environ.get("TRACE", "0") == "1":
         sys.settrace(trace_func)
         reset_lines()
+
+
+def add_strongly_killed(mut):
+    global STRONGLY_KILLED
+    STRONGLY_KILLED.add(mut)
+    logger.debug("Strongly killed: {mut}")
 
 
 def t_wait_for_forks():
@@ -401,9 +432,17 @@ def t_counter_results():
     return res
 
 
+def maybe_clean_cache():
+    if CACHE_PATH:
+        if FORKING_CONTEXT is not None:
+            if FORKING_CONTEXT.is_parent:
+                Path(CACHE_PATH).unlink()
+
+
 def t_gather_results() -> Any:
     disable_line_counting()
     t_wait_for_forks()
+    maybe_clean_cache()
 
     results = t_get_killed()
     results['execution_mode'] = EXECUTION_MODE.name
@@ -418,7 +457,7 @@ def t_gather_results() -> Any:
 def t_final_exception() -> None:
     # Program is crashing, mark all active mutants as strongly killed
     for mut in ACTIVE_MUTANTS:
-        STRONGLY_KILLED.add(mut)
+        add_strongly_killed(mut)
     t_gather_results()
 
 
@@ -426,24 +465,195 @@ def t_get_logical_path():
     return LOGICAL_PATH
 
 
+def untaint_args(*args, **kwargs):
+    all_muts = set([MAINLINE])
+    for arg in args + tuple(kwargs.values()):
+        if type(arg) == ShadowVariable:
+            all_muts |= arg._get_paths()
+
+    untainted_args = {}
+    for mut in all_muts:
+
+        mut_args = []
+        for arg in args:
+            if type(arg) == ShadowVariable:
+                arg_shadow = arg._shadow
+                if mut in arg_shadow:
+                    mut_args.append(arg_shadow[mut])
+                else:
+                    mut_args.append(arg_shadow[MAINLINE])
+            else:
+                mut_args.append(arg)
+
+        mut_kwargs = {}
+        for name, arg in kwargs.items():
+            if type(arg) == ShadowVariable:
+                arg_shadow = arg._shadow
+                if mut in arg_shadow:
+                    mut_kwargs[name] = arg_shadow[mut]
+                else:
+                    mut_kwargs[name] = arg_shadow[MAINLINE]
+            else:
+                mut_kwargs[name] = arg
+
+        untainted_args[mut] = (tuple(mut_args), dict(mut_kwargs))
+
+    return untainted_args
+
+
+def prune_cached_muts(muts, *args, **kwargs):
+    muts = set(muts) - set([MAINLINE])
+    # assert MAINLINE not in muts
+
+    for arg in args + tuple(kwargs.values()):
+        if type(arg) == ShadowVariable:
+            arg._prune_muts(muts)
+            
+    return args, kwargs
+
+
+def load_cache():
+    with open(CACHE_PATH, 'rb') as cache_f:
+        try:
+            cache, mut_stack = pickle.load(cache_f)
+        except EOFError:
+            # Cache has no content yet.
+            cache = {}
+            mut_stack = []
+    return cache, mut_stack
+
+
+def save_cache(cache, mut_stack):
+    with open(CACHE_PATH, 'wb') as cache_f:
+        try:
+            pickle.dump((cache, mut_stack), cache_f)
+        except TypeError:
+            raise ValueError(f"Can't serialize: {cache} {mut_stack}")
+
+
+def push_cache_stack():
+    if CACHE_PATH is not None:
+        cache, mut_stack = load_cache()
+        mut_stack.append(set())
+        save_cache(cache, mut_stack)
+
+
+def pop_cache_stack():
+    if CACHE_PATH is not None:
+        cache, mut_stack = load_cache()
+        mut_stack.pop()
+        save_cache(cache, mut_stack)
+
+
+def maybe_mark_mutation(mutations):
+    if CACHE_PATH is not None:
+        cache, mut_stack = load_cache()
+        muts = mutations.keys() - set([MAINLINE])
+        # logger.debug(f"{cache, mut_stack}")
+
+        for ii in range(len(mut_stack)):
+            mut_stack[ii] = mut_stack[ii] | muts
+
+        # logger.debug(f"{cache, mut_stack}")
+        save_cache(cache, mut_stack)
+
+
+def call_maybe_cache(f, *args, **kwargs):
+    untainted_args = untaint_args(*args, **kwargs)
+    # logging.debug(f"in: {args} {kwargs} untainted: {untainted_args}")
+    if CACHE_PATH is not None:
+        cache, mut_stack = load_cache()
+
+        # logger.debug(f"cache: {cache} mut_stack: {mut_stack}")
+
+        mut_is_cached = {}
+        for mut, (mut_args, mut_kwargs) in untainted_args.items():
+
+            if EXECUTION_MODE == ExecutionMode.SHADOW_CACHE:
+                if mut == MAINLINE:
+                    continue
+            elif EXECUTION_MODE == ExecutionMode.SHADOW_FORK_CACHE:
+                if LOGICAL_PATH == MAINLINE and mut == MAINLINE:
+                    continue
+            else:
+                raise ValueError(f"Unexpected execution mode: {EXECUTION_MODE}")
+
+            key = f"{f.__name__, mut_args, mut_kwargs}"
+            if key in cache:
+                cache_res = cache[key]
+                mut_is_cached[mut] = cache_res
+                # logger.debug(f"cached res: {key}, {cache_res}")
+            
+        logger.debug(f"{LOGICAL_PATH} {ACTIVE_MUTANTS} {len(mut_is_cached)} {len(untainted_args)}")
+        if len(mut_is_cached) == len(untainted_args):
+            # all results are cached, no need to execute function
+            res = ShadowVariable(mut_is_cached)
+        else:
+            try:
+                args, kwargs = prune_cached_muts(mut_is_cached.keys(), *args, **kwargs)
+                # logger.debug(f"pruned: {args, kwargs}")
+                res = f(*args, **kwargs)
+            except Exception as e:
+                raise NotImplementedError("Exceptions in wrapped functions are not supported.")
+
+            # update cache for new results
+            cache, mut_stack = load_cache()
+
+            cache_updated = False
+            if type(res) == ShadowVariable:
+                for mut in res._shadow:
+                    # only cache if mut in input args and not introduced by called function
+                    if mut in untainted_args and mut not in mut_stack[-1]:
+                        mut_args, mut_kwargs = untainted_args[mut]
+                        key = f"{f.__name__, mut_args, mut_kwargs}"
+                        cache[key] = res._shadow[mut]
+                        cache_updated = True
+                        # logger.debug(f"cache res: {key}, {res}")
+            else:
+                mut_args, mut_kwargs = untainted_args[MAINLINE]
+                key = f"{f.__name__, mut_args, mut_kwargs}"
+                if key not in cache:
+                    cache[key] = res
+                    cache_updated = True
+                    # logger.debug(f"cache res: {key}, {res}")
+                res = ShadowVariable({MAINLINE: res})
+
+            if cache_updated:
+                save_cache(cache, mut_stack)
+
+            # insert cached results
+            # logger.debug(f"{mut_is_cached}, {res}")
+            res = ShadowVariable({**mut_is_cached, **res._shadow})
+
+        # logger.debug(f"{res}")
+        return res
+
+    else:
+        # no caching, just do it normally
+        try:
+            res = f(*args, **kwargs)
+        except Exception as e:
+            raise NotImplementedError("Exceptions in wrapped functions are not supported.")
+
+    return res
+
+
 def fork_wrap(f, *args, **kwargs):
     global FORKING_CONTEXT
     global ACTIVE_MUTANTS
     global MASKED_MUTANTS
     global STRONGLY_KILLED
+    # logger.debug(f"CALL {f.__name__}({args} {kwargs})")
     old_forking_context = FORKING_CONTEXT
     old_active_mutants = deepcopy(ACTIVE_MUTANTS)
     old_masked_mutants = deepcopy(MASKED_MUTANTS)
 
     FORKING_CONTEXT = Forker()
-    try:
-        res = f(*args, **kwargs)
-    except Exception as e:
-        # logger.info(f"Exception in wrapped function: {e}")
-        # for mut in ACTIVE_MUTANTS:
-        #     STRONGLY_KILLED.add(mut)
-        raise NotImplementedError("Exceptions in wrapped functions are not supported.")
+
+    push_cache_stack()
+    res = call_maybe_cache(f, *args, **kwargs)
     combined_results = FORKING_CONTEXT.wait_for_forks(fork_res=res)
+    pop_cache_stack()
 
     FORKING_CONTEXT = old_forking_context
     ACTIVE_MUTANTS = old_active_mutants
@@ -453,6 +663,7 @@ def fork_wrap(f, *args, **kwargs):
     # mainline value is always in first
     as_shadow = {MAINLINE: combined_results[0]}
     for child_res in combined_results[1:]:
+        # logger.debug(f"active: {child_res['active']}")
         child_fork_res = child_res['fork_res']
         if type(child_fork_res) == dict:
             for active in child_res['active']:
@@ -476,7 +687,8 @@ def no_fork_wrap(f, *args, **kwargs):
     global LOGICAL_PATH
     global ACTIVE_MUTANTS
     global MASKED_MUTANTS
-    logger.debug(f"CALL {f.__name__}({args} {kwargs})")
+    # logger.debug(f"CALL {f.__name__}({args} {kwargs})")
+    before_logical_path = LOGICAL_PATH
     before_active = deepcopy(ACTIVE_MUTANTS)
     before_masked = deepcopy(MASKED_MUTANTS)
 
@@ -489,23 +701,22 @@ def no_fork_wrap(f, *args, **kwargs):
     remaining_paths -= before_masked
 
     tainted_return = {}
+    push_cache_stack()
     while remaining_paths:
         LOGICAL_PATH = remaining_paths.pop()
-        logger.debug(f"cur path: {LOGICAL_PATH} remaining: {remaining_paths}")
+        # logger.debug(f"cur path: {LOGICAL_PATH} remaining: {remaining_paths}")
         ACTIVE_MUTANTS = deepcopy(before_active)
         MASKED_MUTANTS = deepcopy(before_masked)
-        try:
-            res = f(*args, **kwargs)
-        except Exception:
-            raise NotImplementedError("Exceptions in wrapped functions are not supported.")
+
+        res = call_maybe_cache(f, *args, **kwargs)
         after_active = deepcopy(ACTIVE_MUTANTS)
         after_masked = deepcopy(MASKED_MUTANTS)
-        logger.debug('wrapped: %s(%s %s) -> %s (%s)', f.__name__, args, kwargs, res, type(res))
+        # logger.debug('wrapped: %s(%s %s) -> %s (%s)', f.__name__, args, kwargs, res, type(res))
         new_active = (after_active or set()) - (before_active or set())
         new_masked = after_masked - before_masked
         
-        logger.debug("masked: %s %s %s", before_masked, after_masked, new_masked)
-        logger.debug("active: %s %s %s", before_active, after_active, new_active)
+        # logger.debug("masked: %s %s %s", before_masked, after_masked, new_masked)
+        # logger.debug("active: %s %s %s", before_active, after_active, new_active)
         if type(res) != ShadowVariable:
             assert LOGICAL_PATH not in tainted_return, f"{LOGICAL_PATH} {tainted_return}"
             tainted_return[LOGICAL_PATH] = res
@@ -557,11 +768,13 @@ def no_fork_wrap(f, *args, **kwargs):
         remaining_paths |= new_masked
         remaining_paths -= done_paths
 
-    LOGICAL_PATH = MAINLINE
+    pop_cache_stack()
+
+    LOGICAL_PATH = before_logical_path
     ACTIVE_MUTANTS = before_active
     MASKED_MUTANTS = before_masked
 
-    logger.debug("return: %s", tainted_return)
+    # logger.debug("return: %s", tainted_return)
 
     # If only mainline in return value untaint it
     if len(tainted_return) == 1:
@@ -610,20 +823,29 @@ def t_cond(cond: Any) -> bool:
 
         assert type(mainline_res) == bool, f"{type(mainline_res)}"
 
-        logger.debug("t_cond: (%s, %s) %s", LOGICAL_PATH, res, shadow)
+        # logger.debug("t_cond: (%s, %s) %s", LOGICAL_PATH, res, shadow)
 
-        for path, path_val in shadow.items():
+        paths_to_check = set(shadow.keys())
+        if ACTIVE_MUTANTS:
+            paths_to_check |= ACTIVE_MUTANTS
+
+        for path in paths_to_check:
+            if path in shadow:
+                path_val = shadow[path]
+            else:
+                path_val = shadow[MAINLINE]
             if path_val != res:
                 if path == MAINLINE:
                     logical_path_is_diverging = True
                     continue
                 diverging_mutants.append(path)
                 if LOGICAL_PATH == MAINLINE:
-                    logger.info(f"t_cond weakly_killed: {path}")
+                    # logger.info(f"t_cond weakly_killed: {path}")
                     WEAKLY_KILLED.add(path)
                 if ACTIVE_MUTANTS is not None:
                     ACTIVE_MUTANTS.discard(path)
                 MASKED_MUTANTS.add(path)
+                logger.debug(f"masked {path}")
             else:
                 companion_mutants.append(path)
 
@@ -642,10 +864,12 @@ def t_cond(cond: Any) -> bool:
         else:
             # Follow the logical path, if that is not the same as mainline mark other mutations as inactive
             if logical_path_is_diverging:
-                if ACTIVE_MUTANTS is None:
-                    ACTIVE_MUTANTS = set()
-                    for path in companion_mutants:
-                        ACTIVE_MUTANTS.add(path)
+                # if ACTIVE_MUTANTS is None:
+                ACTIVE_MUTANTS = set()
+                MASKED_MUTANTS |= set(diverging_mutants)
+                logger.debug(f"masked {MASKED_MUTANTS}")
+                for path in companion_mutants:
+                    ACTIVE_MUTANTS.add(path)
 
         return res
     else:
@@ -687,14 +911,14 @@ def shadow_assert(cmp_result):
             if path == MAINLINE:
                 continue
             if not val:
-                STRONGLY_KILLED.add(path)
-                logger.info(f"t_assert strongly killed: {path}")
+                add_strongly_killed(path)
+                # logger.info(f"t_assert strongly killed: {path}")
 
         if ACTIVE_MUTANTS is not None and not shadow[MAINLINE]:
             assert LOGICAL_PATH in ACTIVE_MUTANTS, f"{ACTIVE_MUTANTS}"
             for mut in ACTIVE_MUTANTS:
                 if mut not in shadow:
-                    STRONGLY_KILLED.add(mut)
+                    add_strongly_killed(mut)
                     logger.info(f"t_assert strongly killed: {path}")
 
         # Do the actual assertion as would be done in the unchanged program but only for mainline execution
@@ -704,7 +928,7 @@ def shadow_assert(cmp_result):
         if not cmp_result:
             if ACTIVE_MUTANTS is not None:
                 for mut in ACTIVE_MUTANTS:
-                    STRONGLY_KILLED.add(mut)
+                    add_strongly_killed(mut)
                     logger.info(f"t_assert strongly killed: {mut}")
             else:
                 assert cmp_result, f"Failed original assert"
@@ -717,12 +941,17 @@ def split_assert(cmp_result):
         return
     else:
         for mut in ACTIVE_MUTANTS:
-            STRONGLY_KILLED.add(mut)
+            add_strongly_killed(mut)
             # logger.info(f"t_assert strongly killed: {mut}")
 
 
 def t_assert(cmp_result):
-    if EXECUTION_MODE in [ExecutionMode.SHADOW, ExecutionMode.SHADOW_FORK]:
+    if EXECUTION_MODE in [
+        ExecutionMode.SHADOW,
+        ExecutionMode.SHADOW_FORK,
+        ExecutionMode.SHADOW_CACHE,
+        ExecutionMode.SHADOW_FORK_CACHE,
+    ]:
         shadow_assert(cmp_result)
     elif EXECUTION_MODE in [ExecutionMode.SPLIT_STREAM, ExecutionMode.MODULO_EQV]:
         split_assert(cmp_result)
@@ -764,25 +993,28 @@ def combine_modulo_eqv(mutations):
     if LOGICAL_PATH in mutations:
         log_res = mutations[LOGICAL_PATH]
 
-    if LOGICAL_PATH == MAINLINE:
-        combined = defaultdict(list)
-        for mut_id, val in mutations.items():
-            if mut_id in [MAINLINE, LOGICAL_PATH]:
-                continue
-            combined[val].append(mut_id)
+    # if LOGICAL_PATH == MAINLINE:
+    combined = defaultdict(list)
+    for mut_id in set(mutations.keys()) | (ACTIVE_MUTANTS or set()):
+        if mut_id in mutations:
+            val = mutations[mut_id]
+        else:
+            val = mutations[MAINLINE]
+        if mut_id in [MAINLINE, LOGICAL_PATH]:
+            continue
+        combined[val].append(mut_id)
 
-        for val, mut_ids in combined.items():
-            if val != log_res:
-                main_mut_id = mut_ids[0]
-                if ACTIVE_MUTANTS is not None:
-                    ACTIVE_MUTANTS -= set(mut_ids)
-                MASKED_MUTANTS |= set(mut_ids)
-                if FORKING_CONTEXT.maybe_fork(main_mut_id):
-                    MASKED_MUTANTS = set()
-                    ACTIVE_MUTANTS = set(mut_ids)
-                    if 2 in mut_ids:
-                        print("hi")
-                    return val
+    for val, mut_ids in combined.items():
+        if val != log_res:
+            main_mut_id = mut_ids[0]
+            if ACTIVE_MUTANTS is not None:
+                ACTIVE_MUTANTS -= set(mut_ids)
+            MASKED_MUTANTS |= set(mut_ids)
+            logger.debug(f"masked: {MASKED_MUTANTS}")
+            if FORKING_CONTEXT.maybe_fork(main_mut_id):
+                MASKED_MUTANTS = set()
+                ACTIVE_MUTANTS = set(mut_ids)
+                return val
     try:
         return mutations[LOGICAL_PATH]
     except KeyError:
@@ -790,12 +1022,27 @@ def combine_modulo_eqv(mutations):
 
 
 def t_combine(mutations: dict[int, Any]) -> Any:
+    evaluated_mutations = {}
+    for mut, res in mutations.items():
+        if type(res) != ShadowVariable and callable(res):
+            try:
+                res = res()
+            except Exception as e:
+                if mut == MAINLINE and ACTIVE_MUTANTS is not None:
+                    for mm in ACTIVE_MUTANTS:
+                        add_strongly_killed(mm)
+                else:
+                    add_strongly_killed(mut)
+                # logger.debug(f"mut exception: {mutations} {mut} {e}")
+                continue
+        evaluated_mutations[mut] = res
     if EXECUTION_MODE is ExecutionMode.SPLIT_STREAM:
-        res = combine_split_stream(mutations)
+        res = combine_split_stream(evaluated_mutations)
     elif EXECUTION_MODE is ExecutionMode.MODULO_EQV:
-        res = combine_modulo_eqv(mutations)
+        res = combine_modulo_eqv(evaluated_mutations)
     else:
-        res = ShadowVariable(mutations)
+        maybe_mark_mutation(evaluated_mutations)
+        res = ShadowVariable(evaluated_mutations)
     return res
 
 
@@ -817,7 +1064,7 @@ ALLOWED_DUNDER_METHODS = {
 
 DISALLOWED_DUNDER_METHODS = [
     '__aenter__', '__aexit__', '__aiter__', '__anext__', '__await__',
-    '__bytes__', '__call__', '__class__', '__cmp__', '__complex__', '__contains__',
+    '__bytes__', '__call__', '__cmp__', '__complex__', '__contains__',
     '__delattr__', '__delete__', '__delitem__', '__delslice__', '__dir__', 
     '__enter__', '__exit__', '__fspath__',
     '__get__', '__getitem__', '__getnewargs__', '__getslice__', 
@@ -826,7 +1073,7 @@ DISALLOWED_DUNDER_METHODS = [
     '__ior__', '__iter__', '__ixor__', 
     '__next__', '__nonzero__',
     '__pos__', '__prepare__', '__rdiv__',
-    '__rdivmod__', '__reduce__', '__reduce_ex__', '__repr__', '__reversed__',
+    '__rdivmod__', '__repr__', '__reversed__',
     '__rpow__', '__set__', '__setitem__',
     '__setslice__', '__sizeof__', '__subclasscheck__', '__subclasses__',
     
@@ -836,6 +1083,9 @@ DISALLOWED_DUNDER_METHODS = [
     # a ShadowVariable
     # disallow these dunders to avoid accidentally losing taint info
     '__bool__', '__float__',
+
+    # ShadowVariable needs to be pickleable for caching to work.
+    # so '__reduce__', '__reduce_ex__', '__class__' are implemented.
 ]
 
 LIST_OF_IGNORED_DUNDER_METHODS = [
@@ -901,8 +1151,19 @@ class ShadowVariable():
     def __repr__(self):
         return f"ShadowVariable({self._shadow})"
 
+    def __reduce__(self):
+        return (self.__class__, (self._shadow, ))
+
     def _get_paths(self):
         return self._shadow.keys()
+
+    def _prune_muts(self, muts):
+        "Copies shadow, does not modify in place."
+        assert MAINLINE not in muts
+        shadow = deepcopy(self._shadow)
+        for mut in muts:
+            shadow.pop(mut, None)
+        return ShadowVariable(shadow)
 
     def _check_op_available(shadow, op):
         global STRONGLY_KILLED
@@ -914,7 +1175,7 @@ class ShadowVariable():
             try:
                 shadow.__getattribute__(op)
             except AttributeError:
-                STRONGLY_KILLED.add(k)
+                add_strongly_killed(k)
                 killed.append(k)
         for k in killed:
             del shadow[k]
@@ -931,7 +1192,7 @@ class ShadowVariable():
                 try_other_side = True
                 k_res = None
             except ZeroDivisionError:
-                STRONGLY_KILLED.add(k)
+                add_strongly_killed(k)
                 continue
 
             if k_res == NotImplemented:
@@ -951,10 +1212,10 @@ class ShadowVariable():
                 try:
                     k_res = context(right(k), left(k), other_op)
                 except AttributeError:
-                    STRONGLY_KILLED.add(k)
+                    add_strongly_killed(k)
                     continue
                 if k_res == NotImplemented:
-                    STRONGLY_KILLED.add(k)
+                    add_strongly_killed(k)
                     continue
 
             res[k] = k_res

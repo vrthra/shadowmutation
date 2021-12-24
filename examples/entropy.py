@@ -1,24 +1,25 @@
 from typing import Tuple, List, Optional
+
+
+def ln(val: float) -> float:
+    # c_log = 1000.0 * ((c ** (1/1000.0)) - 1)
+    c_log = 1/1000.0
+    c_log = val ** c_log
+    c_log = c_log - 1
+    c_log = 1000.0 * c_log
+    return c_log
+
  
 def entropy(hist: List[int], l: int) -> Optional[float]:
     c = hist[0] / l
 
-    # c_log = 1000.0 * ((c ** (1/1000.0)) - 1)
-    c_log = 1/1000.0
-    c_log = c ** c_log
-    c_log = c_log - 1
-    c_log = 1000.0 * c_log
+    c_log = ln(c)
 
     normalized = -c * c_log
     res = normalized
     for v in hist[1:]:
         c = v / l
-        # c_log = 1000.0 * ((c ** (1/1000.0)) - 1)
-        c_log = 1/1000.0
-        c_log = c ** c_log
-        c_log = c_log - 1
-        c_log = 1000.0 * c_log
-
+        c_log = ln(c)
         normalized = -c * c_log
         # print(c, normalized)
         res = res + normalized

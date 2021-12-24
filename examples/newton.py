@@ -1,21 +1,27 @@
 from math import sqrt
 
+
+def calc(number: float, a :float) -> float:
+    return 0.5 * (number + a / number) 
+
+
 def newton_method(number: float, number_iters: int = 100) -> float:
 
     a = float(number) 
 
-    ctr = 0
     i = 0
     while True:
-        if ctr >= number_iters:
-            break
         if i >= number_iters:
             break
 
-        number = 0.5 * (number + a / number) 
+        new_number = calc(number, a)
+        diff = round(new_number - number, 8)
+        if diff == 0:
+            number = new_number
+            break
+        number = new_number
 
         i = i + 1
-        ctr = ctr + 1
 
     return number
 

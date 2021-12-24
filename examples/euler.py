@@ -1,26 +1,31 @@
-from typing import Callable
+
+def is_negligible(val: float) -> bool:
+    return round(val, 3) == 0
+
+
+def newton_cooling(h: float, y: float) -> float:
+    new_y = y - 20
+    update = -0.07 * new_y
+    update_y = h * update
+    return update_y
+
 
 def euler(y0: float, a: float, b: int, h: int) -> float:
-    iter_ctr = 0
     t = a
     y = y0
     while True:
         # if t > b
-        if (b - t) < 0:
+        if t > b:
             break
-        if iter_ctr > 100:
-            break
-        # print("%6.3f %6.3f" % (t, y))
+
         t = t + h
-        cooling_factor = y - 20
-        newton_cooling = -0.07 * cooling_factor
-        update_y = h * newton_cooling
+        update_y = newton_cooling(h, y)
+        if is_negligible(update_y):
+            break
+
         y = y + update_y
-        iter_ctr = iter_ctr + 1
     return y
- 
-# def newtoncooling(time: float, temp: float) -> float:
-# 	return 
+
  
 def test_euler() -> None:
     res = euler(100,0,100,10)

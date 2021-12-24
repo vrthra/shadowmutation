@@ -59,10 +59,13 @@ class MutContainer():
         node = ast.parse("t_combine({})")
         dict_node = node.body[0].value.args[0]
 
+        lambda_node = ast.parse("lambda: val").body[0].value
+
         for mut_id, mutation_node in self.mutations:
             mut_id_node = ast.Constant(mut_id, 'int')
+            mutation_val_node = apply(ReplaceNameTransformer("val", mutation_node), deepcopy(lambda_node))
             dict_node.keys.append(mut_id_node)
-            dict_node.values.append(mutation_node)
+            dict_node.values.append(mutation_val_node)
 
         return node.body[0].value
 
@@ -309,15 +312,15 @@ def f():
             None if type(op) == ast.Add      else "left + right",
             None if type(op) == ast.Sub      else "left - right",
             None if type(op) == ast.Mult     else "left * right",
-            # None if type(op) == ast.Div      else "left / right",
-            # None if type(op) == ast.Mod      else r"left % right",
+            None if type(op) == ast.Div      else "left / right",
+            None if type(op) == ast.Mod      else r"left % right",
             # None if type(op) == ast.Pow      else "left ** right",
             None if type(op) == ast.LShift   else "left << right",
             None if type(op) == ast.RShift   else "left >> right",
             None if type(op) == ast.BitOr    else "left | right",
             None if type(op) == ast.BitXor   else "left ^ right",
             None if type(op) == ast.BitAnd   else "left & right",
-            # None if type(op) == ast.FloorDiv else "left // right",
+            None if type(op) == ast.FloorDiv else "left // right",
         ]
         
         variables = [
@@ -544,13 +547,6 @@ def main():
 
     generate_split_stream(args.source, result_dir, args.ignore, filtered_mutations)
     generate_shadow(args.source, result_dir, args.ignore, filtered_mutations)
-
-
-
-
-    # mutated_source = load_and_mutate(args.source, args.ignore)
-    # with open(args.target, "wt") as f:
-    #     f.write(to_source(mutated_source))
 
 
 if __name__ == "__main__":
