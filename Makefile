@@ -26,7 +26,7 @@ dev:
 	# EXECUTION_MODE=shadow_fork_cache GATHER_ATEXIT=1 TRACE=1 python3 tmp/caesar_cypher/shadow_execution.py
 
 test:
-	pytest --log-cli-level=DEBUG --log-format="%(levelname)s %(process)d %(message)s"
+	python3 -m pytest --log-cli-level=DEBUG --log-format="%(levelname)s %(process)d %(message)s"
 
 
 tmp:
