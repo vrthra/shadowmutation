@@ -17,9 +17,9 @@ $(SUBJECTS): | tmp
 
 
 dev:
-	# TRACE=1 python3 tmp/caesar_cypher/traditional_0.py
+	TRACE=1 python3 tmp/factorization/traditional_25.py
 	# EXECUTION_MODE=split GATHER_ATEXIT=1 TRACE=1 python3 tmp/caesar_cypher/split_stream.py
-	EXECUTION_MODE=modulo GATHER_ATEXIT=1 TRACE=1 python3 tmp/caesar_cypher/split_stream.py
+	# EXECUTION_MODE=modulo GATHER_ATEXIT=1 TRACE=1 python3 tmp/caesar_cypher/split_stream.py
 	# EXECUTION_MODE=shadow GATHER_ATEXIT=1 TRACE=1 python3 tmp/prime/shadow_execution.py
 	# EXECUTION_MODE=shadow_cache GATHER_ATEXIT=1 TRACE=1 python3 tmp/prime/shadow_execution.py
 	# EXECUTION_MODE=shadow_fork GATHER_ATEXIT=1 TRACE=1 python3 tmp/prime/shadow_execution.py

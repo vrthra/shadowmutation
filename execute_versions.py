@@ -8,7 +8,7 @@ from collections import defaultdict
 from pathlib import Path
 
 
-def run_it(path, mode=None, logical_path=None, result_file=None, should_not_print=False):
+def run_it(path, mode=None, logical_path=None, result_file=None, should_not_print=False, timeout=None):
     # print(path)
     env = deepcopy(os.environ)
     if logical_path is not None:
@@ -19,18 +19,18 @@ def run_it(path, mode=None, logical_path=None, result_file=None, should_not_prin
         env['EXECUTION_MODE'] = mode
     env['TRACE'] = "1"
     env['GATHER_ATEXIT'] = '1'
-    res = run(['python3', path], stdout=PIPE, stderr=STDOUT, env=env)
+    res = run(['python3', path], stdout=PIPE, stderr=STDOUT, env=env, timeout=timeout)
     if res.returncode != 0 and not should_not_print:
         print(f"{res.args} => {res.returncode}")
         print(res.stdout.decode())
     return res
 
 
-def get_res(path, mode, should_not_print=False):
+def get_res(path, mode, should_not_print=False, timeout=None):
     res_path = Path('res.json')
     res_path.unlink(missing_ok=True)
     start = time.time()
-    run_res = run_it(path, mode=mode, result_file=res_path, should_not_print=should_not_print)
+    run_res = run_it(path, mode=mode, result_file=res_path, should_not_print=should_not_print, timeout=timeout)
     end = time.time()
     try:
         with open(res_path, 'rt') as f:
@@ -81,9 +81,9 @@ def main():
     tool_ctr = 0
     tool_runtime = 0
     subject_line_ctr = defaultdict(int)
-    traditional_results = {'killed': [], 'alive': []}
+    traditional_results = {'killed': [], 'alive': [], 'timeout': []}
     for path in sorted(list(Path(args.dir).glob("traditional_*.py"))):
-        res = get_res(path, None, should_not_print=True)
+        res = get_res(path, None, should_not_print=True, timeout=5)
         mut_id = int(path.stem[len('traditional_'):])
         mut_ids.append(mut_id)
         subject_ctr += res['subject_count']

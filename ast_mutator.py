@@ -4,6 +4,7 @@ import argparse
 import re
 import shutil
 import json
+import subprocess
 from functools import partial
 from pathlib import Path
 from typing import NamedTuple, Tuple, Union, Any
@@ -440,7 +441,13 @@ def generate_traditional_mutation(path, res_dir, function_ignore_regex, mut) -> 
     mypy_result = api.run([str(res_path), "--strict"])
     if mypy_result[2] != 0:
         shutil.move(res_path, mypy_filtered_dir/res_path.name)
-        # print(mypy_result[0])
+        print(mypy_result[0])
+        return mut, False, mypy_result
+    try:
+        subprocess.run(['python3', res_path], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=2)
+    except subprocess.TimeoutExpired:
+        shutil.move(res_path, mypy_filtered_dir/res_path.name)
+        print('timed out:', mut)
         return mut, False, mypy_result
     return mut, True, mypy_result
 
