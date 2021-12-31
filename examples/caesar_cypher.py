@@ -1,19 +1,13 @@
 from typing import List
 
 
-def add_key(c: int, key: int) -> int:
-	c = c + key
-	c = c % 26
-	return c
-
-
 def do_char(char: int, key: int) -> int:
     if char <= 64:
         return char
     if char >= 90:
         return char
     char = char - 65
-    char = add_key(char, key)
+    char = (char + key) % 26
     char = char + 65
     return char
 

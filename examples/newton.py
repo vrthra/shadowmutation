@@ -1,10 +1,6 @@
 from math import sqrt
 
 
-def calc(number: float, a :float) -> float:
-    return 0.5 * (number + a / number) 
-
-
 def newton_method(number: float, number_iters: int = 100) -> float:
 
     a = float(number) 
@@ -14,7 +10,7 @@ def newton_method(number: float, number_iters: int = 100) -> float:
         if i >= number_iters:
             break
 
-        new_number = calc(number, a)
+        new_number = 0.5 * (number + a / number)
         diff = round(new_number - number, 8)
         if diff == 0:
             number = new_number
