@@ -1,19 +1,11 @@
 # Shadow Mutations
 
-The `bank.py` is the original source file, and `bank_mut.py` is the processed
-file with shadow mutations.
+Run `make` to run the full evaluation. The command `make test`, runs the tests.
+While, `make <subject>` runs the evaluation for a subjects file matching `examples/<subject>.py`.
 
-```
-$ python3 ./bank_mut.py
-0 True
-1.1 False
-2.1 False
-2.2 False
-3.1 False
-3.2 False
-WEAKLY_KILLED
-2.1
-```
+Adding a new subject, is done by adding a file matching the above path.
+As this is a prototype, the subjects will have to be quite limited.
 
-The `0` is the main line (no mutations). Others are result from each indicated mutants.
-
+If there is a error like: 
+"Unknown file: {file_name}, add it to the top of shadow.py"
+If the file should be ignored or counted towards the tool files, add it to the respective list.
