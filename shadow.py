@@ -140,6 +140,10 @@ def disable_line_counting():
     sys.settrace(OLD_TRACE)
 
 
+class ShadowException(Exception):
+    pass
+
+
 class SetEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, set):
@@ -245,36 +249,41 @@ class Forker():
             reset_lines()
             return True
 
+    def child_end(self, fork_res=None):
+        assert not self.is_parent
+        pid = self.my_pid()
+        path = LOGICAL_PATH
+        # logger.debug(f"Child with pid: {pid} and path: {path} has reached sync point.")
+        res_path = self.sync_dir/'results'/str(pid)
+        # logger.debug(f"Writing results to: {res_path}")
+        with open(res_path, 'wt') as f:
+            results = t_get_killed()
+            for res in ['strong', 'weak', 'active', 'masked']:
+                results[res] = list(results[res])
+            results['pid'] = pid
+            results['path'] = path
+            results['subject_count'] = SUBJECT_COUNTER
+            results['subject_count_lines'] = {'::'.join(str(a) for a in k): v for k, v in SUBJECT_COUNTER_DICT.items()}
+            results['tool_count'] = TOOL_COUNTER
+            if type(fork_res) == ShadowVariable:
+                results['fork_res'] = fork_res._shadow
+            else:
+                assert type(fork_res) != dict
+                results['fork_res'] = fork_res
+            logger.debug(f"child results to write: {results}")
+            json.dump(results, f)
+
+        # exit the child immediately, this might cause problems for programs actually using multiprocessing
+        # but this is a prototype
+        os._exit(0)
+
     def wait_for_forks(self, fork_res=None):
         global ACTIVE_MUTANTS
         global SUBJECT_COUNTER
         global TOOL_COUNTER
         # if child, write results and exit
         if not self.is_parent:
-            pid = self.my_pid()
-            path = LOGICAL_PATH
-            # logger.debug(f"Child with pid: {pid} and path: {path} has reached sync point.")
-            res_path = self.sync_dir/'results'/str(pid)
-            # logger.debug(f"Writing results to: {res_path}")
-            with open(res_path, 'wt') as f:
-                results = t_get_killed()
-                for res in ['strong', 'weak', 'active', 'masked']:
-                    results[res] = list(results[res])
-                results['pid'] = pid
-                results['path'] = path
-                results['subject_count'] = SUBJECT_COUNTER
-                results['subject_count_lines'] = {'::'.join(str(a) for a in k): v for k, v in SUBJECT_COUNTER_DICT.items()}
-                results['tool_count'] = TOOL_COUNTER
-                if type(fork_res) == ShadowVariable:
-                    results['fork_res'] = fork_res._shadow
-                else:
-                    assert type(fork_res) != dict
-                    results['fork_res'] = fork_res
-                json.dump(results, f)
-
-            # exit the child immediately, this might cause problems for programs actually using multiprocessing
-            # but this is a prototype
-            os._exit(0)
+            self.child_end(fork_res)
 
         # wait for all child processes to end
         combined_fork_res = [fork_res]
@@ -406,7 +415,7 @@ def reinit(logical_path: str=None, execution_mode: Union[None, str]=None, no_ate
 def add_strongly_killed(mut):
     global STRONGLY_KILLED
     STRONGLY_KILLED.add(mut)
-    logger.debug("Strongly killed: {mut}")
+    # logger.debug(f"Strongly killed: {mut}")
 
 
 def t_wait_for_forks():
@@ -583,16 +592,20 @@ def call_maybe_cache(f, *args, **kwargs):
                 cache_res = cache[key]
                 mut_is_cached[mut] = cache_res
                 # logger.debug(f"cached res: {key}, {cache_res}")
+            else:
+                logger.debug(f"not cached: {key}")
             
-        logger.debug(f"{LOGICAL_PATH} {ACTIVE_MUTANTS} {len(mut_is_cached)} {len(untainted_args)}")
+        # logger.debug(f"{LOGICAL_PATH} {ACTIVE_MUTANTS} {len(mut_is_cached)} {len(untainted_args)}")
         if len(mut_is_cached) == len(untainted_args):
             # all results are cached, no need to execute function
             res = ShadowVariable(mut_is_cached)
         else:
+            args, kwargs = prune_cached_muts(mut_is_cached.keys(), *args, **kwargs)
+            # logger.debug(f"pruned: {args, kwargs}")
             try:
-                args, kwargs = prune_cached_muts(mut_is_cached.keys(), *args, **kwargs)
-                # logger.debug(f"pruned: {args, kwargs}")
                 res = f(*args, **kwargs)
+            except ShadowException as e:
+                res = e
             except Exception as e:
                 raise NotImplementedError("Exceptions in wrapped functions are not supported.")
 
@@ -606,16 +619,27 @@ def call_maybe_cache(f, *args, **kwargs):
                     if mut in untainted_args and mut not in mut_stack[-1]:
                         mut_args, mut_kwargs = untainted_args[mut]
                         key = f"{f.__name__, mut_args, mut_kwargs}"
-                        cache[key] = res._shadow[mut]
-                        cache_updated = True
-                        # logger.debug(f"cache res: {key}, {res}")
+                        if key not in cache:
+                            cache[key] = res._shadow[mut]
+                            cache_updated = True
+                            logger.debug(f"cache res: {key}")
+            elif type(res) == ShadowException:
+                for mut in res._shadow:
+                    # only cache if mut in input args and not introduced by called function
+                    if mut in untainted_args and mut not in mut_stack[-1]:
+                        mut_args, mut_kwargs = untainted_args[mut]
+                        key = f"{f.__name__, mut_args, mut_kwargs}"
+                        if key not in cache:
+                            cache[key] = res
+                            cache_updated = True
+                            logger.debug(f"cache res: {key}")
             else:
                 mut_args, mut_kwargs = untainted_args[MAINLINE]
                 key = f"{f.__name__, mut_args, mut_kwargs}"
                 if key not in cache:
                     cache[key] = res
                     cache_updated = True
-                    # logger.debug(f"cache res: {key}, {res}")
+                    logger.debug(f"cache res: {key}")
                 res = ShadowVariable({MAINLINE: res})
 
             if cache_updated:
@@ -632,6 +656,8 @@ def call_maybe_cache(f, *args, **kwargs):
         # no caching, just do it normally
         try:
             res = f(*args, **kwargs)
+        except ShadowException as e:
+            raise e
         except Exception as e:
             raise NotImplementedError("Exceptions in wrapped functions are not supported.")
 
@@ -692,13 +718,14 @@ def no_fork_wrap(f, *args, **kwargs):
     before_active = deepcopy(ACTIVE_MUTANTS)
     before_masked = deepcopy(MASKED_MUTANTS)
 
-    remaining_paths = set([0])
+    remaining_paths = set([before_logical_path])
     done_paths = set()
 
     for arg in chain(args, kwargs.values()):
         if type(arg) == ShadowVariable:
             remaining_paths |= arg._get_paths()
     remaining_paths -= before_masked
+    remaining_paths -= STRONGLY_KILLED
 
     tainted_return = {}
     push_cache_stack()
@@ -708,7 +735,13 @@ def no_fork_wrap(f, *args, **kwargs):
         ACTIVE_MUTANTS = deepcopy(before_active)
         MASKED_MUTANTS = deepcopy(before_masked)
 
-        res = call_maybe_cache(f, *args, **kwargs)
+        try:
+            res = call_maybe_cache(f, *args, **kwargs)
+        except ShadowException as e:
+            logger.debug(f"shadow exception: {e}")
+            remaining_paths -= STRONGLY_KILLED
+            continue
+
         after_active = deepcopy(ACTIVE_MUTANTS)
         after_masked = deepcopy(MASKED_MUTANTS)
         # logger.debug('wrapped: %s(%s %s) -> %s (%s)', f.__name__, args, kwargs, res, type(res))
@@ -720,6 +753,11 @@ def no_fork_wrap(f, *args, **kwargs):
         if type(res) != ShadowVariable:
             assert LOGICAL_PATH not in tainted_return, f"{LOGICAL_PATH} {tainted_return}"
             tainted_return[LOGICAL_PATH] = res
+            if LOGICAL_PATH == before_logical_path:
+                if MAINLINE in tainted_return:
+                    assert tainted_return[MAINLINE] == res
+                else:
+                    tainted_return[MAINLINE] = res
 
             if new_active:
                 assert LOGICAL_PATH in new_active, new_active
@@ -741,6 +779,12 @@ def no_fork_wrap(f, *args, **kwargs):
                 log_res = shadow[LOGICAL_PATH]
             else:
                 log_res = shadow[MAINLINE]
+
+            if LOGICAL_PATH == before_logical_path:
+                if MAINLINE in tainted_return:
+                    assert tainted_return[MAINLINE] == shadow[MAINLINE]
+                else:
+                    tainted_return[MAINLINE] = shadow[MAINLINE]
 
             if LOGICAL_PATH in tainted_return:
                 assert tainted_return[LOGICAL_PATH] == log_res, f"{tainted_return[LOGICAL_PATH]} == {log_res}"
@@ -845,7 +889,7 @@ def t_cond(cond: Any) -> bool:
                 if ACTIVE_MUTANTS is not None:
                     ACTIVE_MUTANTS.discard(path)
                 MASKED_MUTANTS.add(path)
-                logger.debug(f"masked {path}")
+                # logger.debug(f"masked {path}")
             else:
                 companion_mutants.append(path)
 
@@ -867,7 +911,7 @@ def t_cond(cond: Any) -> bool:
                 # if ACTIVE_MUTANTS is None:
                 ACTIVE_MUTANTS = set()
                 MASKED_MUTANTS |= set(diverging_mutants)
-                logger.debug(f"masked {MASKED_MUTANTS}")
+                # logger.debug(f"masked {MASKED_MUTANTS}")
                 for path in companion_mutants:
                     ACTIVE_MUTANTS.add(path)
 
@@ -879,7 +923,7 @@ def t_cond(cond: Any) -> bool:
 def get_active(mutations):
     filtered_mutations = {
         path: val for path, val in mutations.items()
-        if path not in MASKED_MUTANTS
+        if path not in MASKED_MUTANTS # and path not in STRONGLY_KILLED and path not in WEAKLY_KILLED
     }
 
     if ACTIVE_MUTANTS is not None:
@@ -1033,7 +1077,7 @@ def t_combine(mutations: dict[int, Any]) -> Any:
                         add_strongly_killed(mm)
                 else:
                     add_strongly_killed(mut)
-                # logger.debug(f"mut exception: {mutations} {mut} {e}")
+                logger.debug(f"mut exception: {mutations} {mut} {e}")
                 continue
         evaluated_mutations[mut] = res
     if EXECUTION_MODE is ExecutionMode.SPLIT_STREAM:
@@ -1050,7 +1094,7 @@ def t_combine(mutations: dict[int, Any]) -> Any:
 # tainted types
 
 ALLOWED_DUNDER_METHODS = {
-    'unary_ops': ['__abs__', '__round__', '__neg__', ],
+    'unary_ops': ['__abs__', '__round__', '__neg__', '__index__', ],
     'bool_ops': [
         '__add__', '__and__', '__div__', '__truediv__', '__rtruediv__', '__divmod__', '__eq__', 
         '__ne__', '__le__', '__len__', '__pow__', '__mod__', '__floordiv__', 
@@ -1068,7 +1112,7 @@ DISALLOWED_DUNDER_METHODS = [
     '__delattr__', '__delete__', '__delitem__', '__delslice__', '__dir__', 
     '__enter__', '__exit__', '__fspath__',
     '__get__', '__getitem__', '__getnewargs__', '__getslice__', 
-    '__hash__', '__import__', '__imul__', '__index__',
+    '__hash__', '__import__', '__imul__', 
     '__int__', '__invert__',
     '__ior__', '__iter__', '__ixor__', 
     '__next__', '__nonzero__',
@@ -1123,7 +1167,24 @@ class ShadowVariable():
 
     def __init__(self, values):
         combined = {}
-        mainline_val = values[MAINLINE]
+        try:
+            mainline_val = values[MAINLINE]
+        except KeyError as e:
+            # mainline value is faulty, this can happen in non-mainline paths
+            # example: non-mainline path goes out of bounds on array accesses
+            # mark all active mutations and/or current logical path as killed
+            # also if forking, stop the fork, for shadow execution just return to wrapper
+            if LOGICAL_PATH != MAINLINE:
+                add_strongly_killed(LOGICAL_PATH)
+            if ACTIVE_MUTANTS is not None:
+                for mut in ACTIVE_MUTANTS:
+                    add_strongly_killed(mut)
+            if FORKING_CONTEXT is not None:
+                assert not FORKING_CONTEXT.is_parent
+                FORKING_CONTEXT.child_end() # child fork ends here
+            else:
+                raise ShadowException(e)
+
         if type(mainline_val) == ShadowVariable:
             combined = mainline_val._shadow
         else:
@@ -1238,9 +1299,9 @@ class ShadowVariable():
     def _do_bool_op(self, other, op, *args, **kwargs):
 
         # logger.debug("op: %s %s %s", self, other, op)
-        self_shadow = self._shadow
+        self_shadow = get_active(self._shadow)
         if type(other) == ShadowVariable:
-            other_shadow = other._shadow
+            other_shadow = get_active(other._shadow)
             # notice that both self and other has taints.
             # the result we need contains taints from both.
             other_main = other_shadow[MAINLINE]
@@ -1255,8 +1316,8 @@ class ShadowVariable():
             )
             vo_ = self._do_op_safely(
                 (k for k in other_shadow if k not in self_shadow),
-                lambda k: other_shadow[k],
                 lambda k: self_main,
+                lambda k: other_shadow[k],
                 op,
                 lambda left, right, op: left.__getattribute__(op)(right, *args, **kwargs)
             )

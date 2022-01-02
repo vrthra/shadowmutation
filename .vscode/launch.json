@@ -12,7 +12,18 @@
             "console": "integratedTerminal",
             "env": {
                 "PYTHONPATH": ".",
-                "EXECUTION_MODE": "split"
+                "EXECUTION_MODE": "shadow"
+            },
+        },
+        {
+            "name": "trad",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "env": {
+                "PYTHONPATH": "."
+                // "EXECUTION_MODE": "traditional"
             },
         }
     ]
