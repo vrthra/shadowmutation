@@ -61,9 +61,10 @@ def extract_data(data):
     
     def runtime(data):
         tt = data['runtime']
-        minutes = tt/60
-        seconds = tt%60
-        return f"{minutes:.0f}:{seconds:.2f}"
+        #minutes = tt/60
+        #seconds = tt%60
+        #return f"{minutes:.0f}:{seconds:.2f}"
+        return f"{tt:.2f}"
 
     return get_sorted(data, 'strong'), get_mode(data), subj_count(data), tool_count(data), line_counts(data), runtime(data)
 
@@ -97,7 +98,7 @@ def main():
             traditional_results['alive'].append(mut_id)
     trad_killed = sorted(traditional_results['killed'])
     print("Comparing results:")
-    print(trad_killed, "TRADITIONAL", subject_ctr, tool_ctr, f"{tool_runtime/60:.0f}:{tool_runtime%60:.2f}")
+    print(trad_killed, "TRADITIONAL", subject_ctr, tool_ctr, f"{tool_runtime:.2f}")
 
 
     split_stream_killed, split_stream_mode, split_stream_subj_count, split_stream_tool_count, ss_line_count, ss_runtime = \
