@@ -1,15 +1,15 @@
 from typing import List
 
 
-def do_char(char: int, key: int) -> int:
-    if char <= 64:
-        return char
-    if char >= 90:
-        return char
-    char = char - 65
-    char = (char + key) % 26
-    char = char + 65
-    return char
+# def do_char(char: int, key: int) -> int:
+#     if char <= 64:
+#         return char
+#     if char >= 90:
+#         return char
+#     char = char - 65
+#     char = (char + key) % 26
+#     char = char + 65
+#     return char
 
 
 def caesar(string: List[int], key: int, decode: bool = False) -> List[int]:
@@ -18,8 +18,16 @@ def caesar(string: List[int], key: int, decode: bool = False) -> List[int]:
 	res = []
 	for c in string:
 		# c_res = ((c - 65 + key) % 26) + 65
-		c_res = do_char(c, key)
-		res.append(c_res)
+		# c_res = do_char(c, key)
+		if c <= 64:
+			pass
+		elif c >= 90:
+			pass
+		else:
+			c = c - 65
+			c = (c + key) % 26
+			c = c + 65
+		res.append(c)
 
 	return res
  

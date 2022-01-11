@@ -145,6 +145,53 @@ def test_wrap(mode):
     assert get_killed() == gen_killed([1, 10], [1, 10])
 
 
+@pytest.mark.parametrize("mode", ['shadow_fork'])
+def test_recursive(mode):
+    @t_wrap
+    def rec(a):
+        if t_cond(t_combine({0: a == 0, 1: a <= 2})):
+            return 0
+
+        res = rec(a - 1)
+        res = res + a
+
+        return res
+
+        if t_cond(a == 1):
+            return b + 1
+        elif t_cond(t_combine({0: a == 2, 10: a >= 2})):
+            return a + b
+        else:
+            return 0
+
+    # reinit(execution_mode=mode, no_atexit=True)
+    # assert simple(0, 1) == 0
+
+    reinit(execution_mode=mode, no_atexit=True)
+    t_assert(rec(t_combine({0: 5, 2: 6})) == 15)
+    assert get_killed() == gen_killed([1, 2], [1, 2])
+
+    # reinit(execution_mode=mode, no_atexit=True)
+    # t_assert(simple(1, t_combine({0: 0, 1: 1})) == 1)
+    # assert get_killed() == gen_killed([1], [])
+
+    # reinit(execution_mode=mode, no_atexit=True)
+    # t_assert(simple(t_combine({0: 0, 1: 1}), t_combine({0: 0, 2: 1})) == 0)
+    # assert get_killed() == gen_killed([1], [1])
+
+    # reinit(execution_mode=mode, no_atexit=True)
+    # t_assert(simple(2, t_combine({0: 1, 1: 2})) == 3)
+    # assert get_killed() == gen_killed([1], [])
+
+    # reinit(execution_mode=mode, no_atexit=True)
+    # t_assert(simple(3, 1) == 0)
+    # assert get_killed() == gen_killed([10], [10])
+
+    # reinit(execution_mode=mode, no_atexit=True)
+    # t_assert(simple(t_combine({0: 3, 1: 1}), 1) == 0)
+    # assert get_killed() == gen_killed([1, 10], [1, 10])
+
+
 #################################################
 # tests for tuple
 # ['__add__', '__class__', '__class_getitem__', '__contains__', '__delattr__', '__dir__',

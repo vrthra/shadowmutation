@@ -84,7 +84,7 @@ def main():
     subject_line_ctr = defaultdict(int)
     traditional_results = {'killed': [], 'alive': [], 'timeout': []}
     for path in sorted(list(Path(args.dir).glob("traditional_*.py"))):
-        res = get_res(path, None, should_not_print=True, timeout=5)
+        res = get_res(path, None, should_not_print=True, timeout=10)
         mut_id = int(path.stem[len('traditional_'):])
         mut_ids.append(mut_id)
         subject_ctr += res['subject_count']

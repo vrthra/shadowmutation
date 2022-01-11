@@ -17,13 +17,13 @@ $(SUBJECTS): | tmp
 
 
 dev:
-	TRACE=1 python3 tmp/factorization/traditional_25.py
+	# TRACE=1 python3 tmp/approx_exp/traditional_33.py
 	# EXECUTION_MODE=split GATHER_ATEXIT=1 TRACE=1 python3 tmp/caesar_cypher/split_stream.py
 	# EXECUTION_MODE=modulo GATHER_ATEXIT=1 TRACE=1 python3 tmp/caesar_cypher/split_stream.py
-	# EXECUTION_MODE=shadow GATHER_ATEXIT=1 TRACE=1 python3 tmp/prime/shadow_execution.py
+	# EXECUTION_MODE=shadow GATHER_ATEXIT=1 TRACE=1 python3 tmp/caesar_cypher/shadow_execution.py
 	# EXECUTION_MODE=shadow_cache GATHER_ATEXIT=1 TRACE=1 python3 tmp/prime/shadow_execution.py
-	# EXECUTION_MODE=shadow_fork GATHER_ATEXIT=1 TRACE=1 python3 tmp/prime/shadow_execution.py
-	# EXECUTION_MODE=shadow_fork_cache GATHER_ATEXIT=1 TRACE=1 python3 tmp/caesar_cypher/shadow_execution.py
+	EXECUTION_MODE=shadow_fork GATHER_ATEXIT=1 TRACE=1 python3 tmp/approx_exp/shadow_execution.py
+	# EXECUTION_MODE=shadow_fork_cache GATHER_ATEXIT=1 TRACE=1 python3 tmp/approx_exp/shadow_execution.py
 
 test:
 	python3 -m pytest --log-cli-level=DEBUG --log-format="%(levelname)s %(process)d %(message)s"

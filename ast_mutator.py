@@ -233,7 +233,6 @@ def f():
         return node
 
     def visit_Assign(self, node):
-        global mutation_counter
         node = self.generic_visit(node)
         return node
 
@@ -335,8 +334,8 @@ def f():
 
 
     def visit_AnnAssign(self, node):
-        adbg(node)
-        raise NotImplementedError()
+        node = self.generic_visit(node)
+        return node
         
 
     def visit_AugAssign(self, node):
