@@ -263,7 +263,7 @@ class Forker():
         # logger.debug(f"Writing results to: {res_path}")
         with open(res_path, 'wb') as f:
             results = t_get_killed()
-            for res in ['strong', 'weak', 'active', 'masked']:
+            for res in ['strong', 'active', 'masked']:
                 results[res] = list(results[res])
             results['pid'] = pid
             results['path'] = path
@@ -325,10 +325,10 @@ class Forker():
                                 # Child has not yet written the results.
                                 continue
 
-                        for res in ['strong', 'weak', 'active']:
+                        for res in ['strong', 'active']:
                             child_results[res] = set(child_results[res])
 
-                        for res in ['strong', 'weak']:
+                        for res in ['strong']:
                             add_res = child_results[res] & child_results['active']
                             all_results[res] |= add_res
 
@@ -353,7 +353,6 @@ class Forker():
 
 
 STRONGLY_KILLED = None
-WEAKLY_KILLED = None
 ACTIVE_MUTANTS = None
 MASKED_MUTANTS = None
 EXECUTION_MODE = None
@@ -366,7 +365,6 @@ def reinit(logical_path: str=None, execution_mode: Union[None, str]=None, no_ate
     # initializing shadow
     global LOGICAL_PATH
     global STRONGLY_KILLED
-    global WEAKLY_KILLED
     global ACTIVE_MUTANTS
     global MASKED_MUTANTS
     global EXECUTION_MODE
@@ -386,7 +384,6 @@ def reinit(logical_path: str=None, execution_mode: Union[None, str]=None, no_ate
     else:
         EXECUTION_MODE = ExecutionMode.get_mode(os.environ.get('EXECUTION_MODE'))
 
-    WEAKLY_KILLED = set()
     STRONGLY_KILLED = set()
     ACTIVE_MUTANTS = None
     MASKED_MUTANTS = set()
@@ -429,7 +426,6 @@ def t_wait_for_forks():
 def t_get_killed():
     return {
         'strong': STRONGLY_KILLED,
-        'weak': WEAKLY_KILLED,
         'active': ACTIVE_MUTANTS,
         'masked': MASKED_MUTANTS,
     }
@@ -867,7 +863,6 @@ def t_wrap(f):
 
 
 def t_cond(cond: Any) -> bool:
-    global WEAKLY_KILLED
     global FORKING_CONTEXT
     global ACTIVE_MUTANTS
     global MASKED_MUTANTS
@@ -910,7 +905,7 @@ def t_cond(cond: Any) -> bool:
                 diverging_mutants.append(path)
                 if LOGICAL_PATH == MAINLINE:
                     # logger.info(f"t_cond weakly_killed: {path}")
-                    WEAKLY_KILLED.add(path)
+                    pass
                 if ACTIVE_MUTANTS is not None:
                     ACTIVE_MUTANTS.discard(path)
                 MASKED_MUTANTS.add(path)
@@ -968,7 +963,6 @@ def get_active_shadow(val):
 
 def shadow_assert(cmp_result):
     global STRONGLY_KILLED
-    global WEAKLY_KILLED
     shadow = get_active_shadow(cmp_result)
     # logger.debug(f"t_assert {cmp_result} {shadow}")
     if shadow is not None:

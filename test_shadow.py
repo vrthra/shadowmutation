@@ -1,14 +1,15 @@
 import pytest
+import logging
+logger = logging.getLogger(__name__)
 
 from shadow import reinit, t_wrap, t_combine, t_wait_for_forks, t_get_killed, t_cond, t_assert, t_tuple
 
-MODES = ['shadow', 'shadow_fork', 'shadow_cache', 'shadow_fork_cache']
+MODES = ['shadow_fork'] # , 'shadow_fork', 'shadow_cache', 'shadow_fork_cache']
 
 
-def gen_killed(strong, weak):
+def gen_killed(strong):
     return {
         'strong': set(strong),
-        'weak': set(weak),
     }
 
 
@@ -17,7 +18,6 @@ def get_killed():
     results = t_get_killed()
     return {
         'strong': set(results['strong']),
-        'weak': set(results['weak']),
     }
 
 
@@ -31,7 +31,7 @@ def test_reinit_t_assert(mode):
         tainted_int = t_combine({0: 0, ii: 1})
 
         t_assert(tainted_int == 0)
-        assert get_killed() == gen_killed({ii}, {})
+        assert get_killed() == gen_killed({ii})
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -47,7 +47,7 @@ def test_split_stream_single_if(mode):
 
     
     t_assert(func(t_combine({0: 0, 1: 1})) == 1)
-    assert get_killed() == gen_killed([1], [1])
+    assert get_killed() == gen_killed([1])
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -77,7 +77,7 @@ def test_split_stream_double_if(mode):
 
     t_assert(func(t_combine({0: 0, 1: 1, 2: 2, 3: 3})) == 0)
     t_get_killed()
-    assert get_killed() == gen_killed([1, 3], [1, 2, 3])
+    assert get_killed() == gen_killed([1, 3])
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -103,7 +103,7 @@ def test_split_stream_nested_if_call(mode):
 
     t_assert(func(t_combine({0: 0, 1: 1, 2: 2, 3: 3})) == 0)
     t_get_killed()
-    assert get_killed() == gen_killed([1, 3], [1, 2, 3])
+    assert get_killed() == gen_killed([1, 3])
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -122,30 +122,30 @@ def test_wrap(mode):
 
     reinit(execution_mode=mode, no_atexit=True)
     t_assert(simple(t_combine({0: 0, 1: 1}), 0) == 0)
-    assert get_killed() == gen_killed([1], [1])
+    assert get_killed() == gen_killed([1])
 
     reinit(execution_mode=mode, no_atexit=True)
     t_assert(simple(1, t_combine({0: 0, 1: 1})) == 1)
-    assert get_killed() == gen_killed([1], [])
+    assert get_killed() == gen_killed([1])
 
     reinit(execution_mode=mode, no_atexit=True)
     t_assert(simple(t_combine({0: 0, 1: 1}), t_combine({0: 0, 2: 1})) == 0)
-    assert get_killed() == gen_killed([1], [1])
+    assert get_killed() == gen_killed([1])
 
     reinit(execution_mode=mode, no_atexit=True)
     t_assert(simple(2, t_combine({0: 1, 1: 2})) == 3)
-    assert get_killed() == gen_killed([1], [])
+    assert get_killed() == gen_killed([1])
 
     reinit(execution_mode=mode, no_atexit=True)
     t_assert(simple(3, 1) == 0)
-    assert get_killed() == gen_killed([10], [10])
+    assert get_killed() == gen_killed([10])
 
     reinit(execution_mode=mode, no_atexit=True)
     t_assert(simple(t_combine({0: 3, 1: 1}), 1) == 0)
-    assert get_killed() == gen_killed([1, 10], [1, 10])
+    assert get_killed() == gen_killed([1, 10])
 
 
-@pytest.mark.parametrize("mode", ['shadow_fork'])
+@pytest.mark.parametrize("mode", MODES)
 def test_recursive(mode):
     @t_wrap
     def rec(a):
@@ -157,39 +157,118 @@ def test_recursive(mode):
 
         return res
 
-        if t_cond(a == 1):
-            return b + 1
-        elif t_cond(t_combine({0: a == 2, 10: a >= 2})):
-            return a + b
+    reinit(execution_mode=mode, no_atexit=True)
+    t_assert(rec(t_combine({0: 5, 2: 6})) == 15)
+    assert get_killed() == gen_killed([1, 2])
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_control_flow_return(mode):
+    @t_wrap
+    def fun(a):
+        if t_cond(t_combine({0: a == 0, 1: a != 0})):
+            return 0
+        else:
+            return 1
+
+    reinit(execution_mode=mode, no_atexit=True)
+    t_assert(fun(0) == 0)
+    assert get_killed() == gen_killed([1])
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_non_mainline_divergence(mode):
+    @t_wrap
+    def fun(a):
+        if t_cond(t_combine({0: a < 5, 1: a > 5})):
+            return 0
+        else:
+            if t_cond(t_combine({0: a == 3, 2: a != 3})):
+                return 1
+            else:
+                return 2
+
+    reinit(execution_mode=mode, no_atexit=True)
+    t_assert(fun(3) == 0)
+    assert get_killed() == gen_killed([1])
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_return_influences_control_flow(mode):
+    @t_wrap
+    def fun_inner(a):
+        # a = 0
+        if t_cond(t_combine({0: a == 0, 1: a != 0})):
+            # 0: return 1
+            return 1
+        else:
+            # 1: return 0
+            return 0
+
+    @t_wrap
+    def fun(a):
+        res = fun_inner(a)
+        logger.debug(f"{res}")
+        # 0: 1, 1: 0
+        if t_cond(t_combine({0: res == 1, 2: res != 1})):
+            # 0: 1 -> return 0
+            return 0
+        else:
+            # 1: 0, 2: 1 != 1 -> return 1
+            return 1
+
+    reinit(execution_mode=mode, no_atexit=True)
+    res = fun(0)
+    logger.debug(f"{res}")
+    t_assert(res == 0)
+    assert get_killed() == gen_killed([1, 2])
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_recursive_return_influences_control_flow(mode):
+
+    @t_wrap
+    def fun(a):
+        a = t_combine({0: a - 1, 1: a - 2})
+        if t_cond(t_combine({0: a <= 0, 2: a <= -5})):
+            return a
+        else:
+            return a + fun(a)
+
+    reinit(execution_mode=mode, no_atexit=True)
+    res = fun(5)
+    logger.debug(f"{res}")
+    t_assert(res == 10)
+    assert get_killed() == gen_killed([1, 2])
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_control_flow_based_on_called_function(mode):
+
+    @t_wrap
+    def inner(a):
+        a = t_combine({0: a % 2, 2: a % 3})
+        if t_cond(t_combine({0: a >= 1, 1: a != 0})):
+            return 1
         else:
             return 0
 
-    # reinit(execution_mode=mode, no_atexit=True)
-    # assert simple(0, 1) == 0
+    @t_wrap
+    def fun(a):
+        a = inner(a) - 1
+        if t_cond(t_combine({0: a == 0, 3: a != 1})):
+            return 1
+        a = inner(a) - 1
+        if t_cond(t_combine({0: a == 0, 4: a != 1})):
+            return 2
+        
+        return 0
 
     reinit(execution_mode=mode, no_atexit=True)
-    t_assert(rec(t_combine({0: 5, 2: 6})) == 15)
-    assert get_killed() == gen_killed([1, 2], [1, 2])
-
-    # reinit(execution_mode=mode, no_atexit=True)
-    # t_assert(simple(1, t_combine({0: 0, 1: 1})) == 1)
-    # assert get_killed() == gen_killed([1], [])
-
-    # reinit(execution_mode=mode, no_atexit=True)
-    # t_assert(simple(t_combine({0: 0, 1: 1}), t_combine({0: 0, 2: 1})) == 0)
-    # assert get_killed() == gen_killed([1], [1])
-
-    # reinit(execution_mode=mode, no_atexit=True)
-    # t_assert(simple(2, t_combine({0: 1, 1: 2})) == 3)
-    # assert get_killed() == gen_killed([1], [])
-
-    # reinit(execution_mode=mode, no_atexit=True)
-    # t_assert(simple(3, 1) == 0)
-    # assert get_killed() == gen_killed([10], [10])
-
-    # reinit(execution_mode=mode, no_atexit=True)
-    # t_assert(simple(t_combine({0: 3, 1: 1}), 1) == 0)
-    # assert get_killed() == gen_killed([1, 10], [1, 10])
+    res = fun(3)
+    logger.debug(f"{res}")
+    t_assert(res == 1)
+    assert get_killed() == gen_killed([2])
 
 
 #################################################
@@ -210,11 +289,11 @@ def test_tuple_eq_with_tint_elem(mode):
     data = t_tuple((1, 2, 3, tainted_int))
 
     t_assert(data == (1, 2, 3, 0))
-    assert get_killed() == gen_killed({1: True}, {})
+    assert get_killed() == gen_killed({1: True})
 
     reinit(execution_mode=mode, no_atexit=True)
     t_assert((1, 2, 3, 0) == data)
-    assert get_killed() == gen_killed({1: True}, {})
+    assert get_killed() == gen_killed({1: True})
 
 
 
