@@ -5,18 +5,18 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Python: Current File",
+            "name": "shadow fork",
             "type": "python",
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal",
             "env": {
                 "PYTHONPATH": ".",
-                "EXECUTION_MODE": "shadow"
+                "EXECUTION_MODE": "shadow_fork"
             },
         },
         {
-            "name": "trad",
+            "name": "traditional",
             "type": "python",
             "request": "launch",
             "program": "${file}",
