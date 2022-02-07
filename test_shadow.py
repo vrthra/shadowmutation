@@ -3,7 +3,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 from shadow import reinit, t_final_exception_test, t_wrap, t_combine, t_wait_for_forks, t_get_killed, t_cond, t_assert, \
-                   t_logical_path, t_seen_mutants, t_masked_mutants, t_tuple
+                   t_logical_path, t_seen_mutants, t_masked_mutants, ShadowVariable
 
 MODES = ['shadow_fork'] # , 'shadow_fork', 'shadow_cache', 'shadow_fork_cache']
 SPLIT_STREAM_MODES = ['split', 'modulo'] # , 'shadow_fork', 'shadow_cache', 'shadow_fork_cache']
@@ -660,3 +660,157 @@ def test_dict_key_tainted(mode):
     # data[0] = 2
 
     assert data[tainted_int] == 1
+
+
+
+#################################################
+# tests for class
+@pytest.mark.parametrize("mode", MODES)
+def test_class_attr_access(mode):
+    class Test():
+        def __init__(self):
+            self.val = 0
+
+    @t_wrap
+    def func(tainted_int):
+        t = Test()
+        t.val += tainted_int
+        return t
+    
+    reinit(execution_mode=mode, no_atexit=True)
+    res = func(t_combine({0: 0, 1: 1}))
+    logger.debug(f"{res} {res.val}")
+    t_assert(res.val == 0)
+    assert get_killed() == gen_killed([1])
+
+
+@pytest.mark.skip()
+@pytest.mark.parametrize("mode", MODES)
+def test_class_cond_attr_access(mode):
+    class Test():
+        def __init__(self):
+            self.val = 0
+
+    @t_wrap
+    def func(tainted_int):
+        t = Test()
+        if t_cond(tainted_int != 0):
+            t.val += 1
+        return t
+    
+    reinit(execution_mode=mode, no_atexit=True)
+    res = func(t_combine({0: 0, 1: 1}))
+    logger.debug(f"{res} {res.val}")
+    t_assert(res.val == 0)
+    assert get_killed() == gen_killed([1])
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_class_init_taint(mode):
+    class Test():
+        def __init__(self, val):
+            self.val = val
+
+    @t_wrap
+    def func(tainted_int):
+        t = Test(tainted_int)
+        return t
+    
+    reinit(execution_mode=mode, no_atexit=True)
+    res = func(t_combine({0: 0, 1: 1}))
+    logger.debug(f"{res} {res.val}")
+    t_assert(res.val == 0)
+    assert get_killed() == gen_killed([1])
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_class_wrap(mode):
+
+    def taint(orig_class):
+        # TODO this needs to be inserted by ast_mutator
+        # TODO move to shadow.py
+        orig_new = orig_class.__new__
+        try:
+            orig_deepcopy = orig_class.__getattr__('__deepcopy__')
+        except AttributeError:
+            orig_deepcopy = None
+
+        def wrap_new(cls, *args, **kwargs):
+            new = orig_new(cls)
+            new._init = False
+            obj = ShadowVariable(new, False, True)
+            obj.__init__(*args, **kwargs)
+            new._init = True
+            return obj
+
+        def deepcopy(*args, **kwargs):
+            logger.debug("hi")
+            raise NotImplementedError()
+
+        orig_class._orig_new = orig_new
+        orig_class.__new__ = wrap_new
+        # orig_class.__deepcopy__ = deepcopy
+
+
+        # cls_proxy = partial(proxy_function, orig_class)
+        # for func in dir(orig_class):
+        #     if func in ['__bool__']:
+        #         setattr(orig_class, func, losing_taint)
+        #         continue
+        #     if func in [
+        #         '_shadow',
+        #         '__new__', '__init__', '__class__', '__dict__', '__getattribute__', '__repr__'
+        #     ]:
+        #         continue
+        #     orig_func = getattr(orig_class, func)
+        #     # logging.debug("%s %s", orig_class, func)
+        #     setattr(orig_class, func, cls_proxy(func, orig_func))
+        return orig_class
+
+    @taint
+    class Test():
+        # def __new__(cls, *args, **kwargs):
+        #     new = super().__new__(cls)
+        #     obj = ShadowVariable(new, False)
+        #     obj._wrapped_init(*args, **kwargs)
+        #     return obj
+
+        def __init__(self, val):
+            self.val = val
+
+    @t_wrap
+    def func(tainted_int):
+        t = Test(tainted_int)
+        return t
+    
+    reinit(execution_mode=mode, no_atexit=True)
+    res = func(t_combine({0: 0, 1: 1}))
+    logger.debug(f"{res} {res.val}")
+    t_assert(res.val == 0)
+    assert get_killed() == gen_killed([1])
+
+# TODO recursive wrapped object init
+
+# TODO internal references in wrapped object (cycles)
+
+# TODO mutation in class function
+
+# TODO mutation in class method
+
+# TODO init with vanilla values
+
+# TODO init taking shadow values
+
+# TODO function call same function for each shadow version should execute unified
+
+# TODO function call different functions
+
+# TODO attribute access fails for some shadow versions
+
+# TODO attribute access fails for mainline
+
+
+#################################################
+# tests for external code
+
+# external function needs to be called with untainted values

@@ -557,3 +557,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# TODO tainting classes, see test_shadow
+# TODO do not mutate __new__ functions of classes

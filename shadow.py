@@ -637,7 +637,7 @@ def call_maybe_cache(f, *args, **kwargs):
         logger.debug(f"{LOGICAL_PATH} {SEEN_MUTANTS} {MASKED_MUTANTS} {len(mut_is_cached)} {len(untainted_args)}")
         if len(mut_is_cached) == len(untainted_args):
             # all results are cached, no need to execute function
-            res = ShadowVariable(mut_is_cached)
+            res = ShadowVariable(mut_is_cached, from_mapping=True, wraps_container=False)
         else:
             try:
                 args, kwargs = prune_cached_muts(mut_is_cached.keys(), *args, **kwargs)
@@ -678,14 +678,14 @@ def call_maybe_cache(f, *args, **kwargs):
                     cache[key] = res
                     cache_updated = True
                     # logger.debug(f"cache res: {key}, {res}")
-                res = ShadowVariable({MAINLINE: res})
+                res = ShadowVariable({MAINLINE: res}, from_mapping=True, wraps_container=False)
 
             if cache_updated:
                 save_cache(cache, mut_stack)
 
             # insert cached results
             # logger.debug(f"{mut_is_cached}, {res}")
-            res = ShadowVariable({**mut_is_cached, **res._shadow})
+            res = ShadowVariable({**mut_is_cached, **res._shadow}, from_mapping=True, wraps_container=False)
 
         # logger.debug(f"{res}")
         return res
@@ -693,8 +693,9 @@ def call_maybe_cache(f, *args, **kwargs):
     else:
         # no caching, just do it normally
         try:
-            active_args = tuple(ShadowVariable(aa)._normalize(SEEN_MUTANTS, MASKED_MUTANTS) for aa in args)
-            active_kwargs = dict({kk: ShadowVariable(aa)._normalize(SEEN_MUTANTS, MASKED_MUTANTS) for kk, aa in kwargs.items()})
+            active_args = tuple(ShadowVariable(aa, False, False)._normalize(SEEN_MUTANTS, MASKED_MUTANTS) for aa in args)
+            active_kwargs = dict({kk: ShadowVariable(aa, False, False)._normalize(SEEN_MUTANTS, MASKED_MUTANTS) for kk, aa in kwargs.items()})
+            logger.debug(f"{f} {len(active_args), len(active_kwargs)} {active_args} {active_kwargs}")
             res = f(*active_args, **active_kwargs)
         except ShadowException as e:
             raise e
@@ -703,7 +704,7 @@ def call_maybe_cache(f, *args, **kwargs):
             logger.error(f"Error: {message}")
             raise NotImplementedError(f"Exceptions in wrapped functions are not supported: {e}")
 
-        res = ShadowVariable(res)
+        res = ShadowVariable(res, False, False)
         res._keep_active(SEEN_MUTANTS, MASKED_MUTANTS)
         return res
 
@@ -726,7 +727,7 @@ def fork_wrap(f, *args, **kwargs):
     FORKING_CONTEXT = old_forking_context
     MASKED_MUTANTS = old_masked_mutants
 
-    res = ShadowVariable(combined_results[0])
+    res = ShadowVariable(combined_results[0], from_mapping=True, wraps_container=False)
 
     for child_res in combined_results[1:]:
         child_fork_res = child_res['fork_res']
@@ -1179,7 +1180,7 @@ def t_combine_shadow(mutations: dict[int, Any]) -> Any:
 
     if EXECUTION_MODE.is_shadow_variant():
         maybe_mark_mutation(evaluated_mutations)
-        res = ShadowVariable(evaluated_mutations)
+        res = ShadowVariable(evaluated_mutations, True, False)
         res._keep_active(SEEN_MUTANTS, MASKED_MUTANTS)
     else:
         raise NotImplementedError()
@@ -1304,10 +1305,9 @@ LIST_OF_IGNORED_DUNDER_METHODS = [
     '__iadd__', '__iand__', '__isub__', 
 ]
 
-
 class ShadowVariable():
     _shadow: dict[int, Any]
-    __slots__ = ['_shadow']
+    __slots__ = ['_shadow', '_container']
 
     for method in ALLOWED_UNARY_DUNDER_METHODS.keys():
         exec(f"""
@@ -1331,19 +1331,25 @@ class ShadowVariable():
         raise ValueError("dunder method {method} is not allowed")
         """.strip())
 
-    def __init__(self, values):
+    # TODO instead of bools maybe create specific init functions
+    def __init__(self, values: dict[int, Any], from_mapping: bool, wraps_container: bool):
         value_type = type(values)
 
         if value_type == ShadowVariable:
-            self._shadow = deepcopy(values._shadow)
+            # TODO self._shadow = deepcopy(values._shadow)
+            self._shadow = values._shadow
+            self._container = values._container
             return
 
+        self._container = wraps_container
         combined = {}
-        if value_type != dict:
+        if not from_mapping:
+            # TODO could make sure there are no shadow variables in the values
+            assert value_type != dict # for testing
             combined[MAINLINE] = values
-        elif value_type in [list, tuple, set]:
-            raise NotImplementedError(f"container types are not implemented: {values}")
         else:
+            assert value_type == dict
+
             try:
                 mainline_val = values[MAINLINE]
             except KeyError as e:
@@ -1387,11 +1393,119 @@ class ShadowVariable():
 
         self._shadow = combined
 
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name.startswith("_"):
+            # logger.debug(f"super setattr {name, value}")
+            return super(ShadowVariable, self).__setattr__(name, value)
+
+        # TODO duplicate contained object if new path is added, otherwise just update
+        self_shadow = get_selected(self._shadow)
+        other_shadow = get_selected(value._shadow)
+
+        mainline_val = self._shadow[MAINLINE]
+
+        for other_path in other_shadow:
+            if other_path not in self_shadow:
+                # TODO this should be put with the class taint wrapper code
+                if mainline_val._init:
+                    self._shadow[other_path] = deepcopy(mainline_val)
+                else:
+                    # This fails when __init__ has not yet been called, start this off 
+                    new = mainline_val._orig_new(type(mainline_val))
+                    self._shadow[other_path] = new
+
+        # res = self._do_op_safely(self_shadow.keys(), lambda k: self_shadow[k].__getattribute__(op)(*args, **kwargs))
+        res = self._do_op_safely(
+            [lambda _1, _2, obj, new_val: obj.__setattr__(name, new_val)],
+            self_shadow.keys(),
+            lambda k: self_shadow[k],
+            lambda k: value._get(k),
+            tuple(),
+            dict(),
+            0,
+        )
+        logger.debug(f"setattr {name, value} -> {res}")
+
+    def __getattr__(self, name: str) -> Any:
+        logger.debug(f"getattr {name}")
+        if name.startswith("_"):
+            res = super(ShadowVariable, self).__getattr__(name)
+            logger.debug(f"res {res}")
+            return res
+        res = object.__getattr__(self, name)
+        raise NotImplementedError()
+
+    def __getattribute__(self, name: str) -> Any:
+        res = super(ShadowVariable, self).__getattribute__(name)
+        if name.startswith("_"):
+            if name != "__init__":
+                return res
+        
+        log_res = self._get_logical_res(LOGICAL_PATH).__getattribute__(name)
+        
+        if callable(log_res):
+            # TODO returning a lambda here works if the callable is only called
+            # it does not work if the callable is compared to some other function or other edge cases
+            # maybe return a dedicated function instead that raises errors for edge cases / implements them correctly
+            return lambda *args, **kwargs: self._callable_wrap(name, *args, **kwargs)
+            
+        logger.debug(f"getattribute {name} {log_res} {type(log_res)}")
+        raise NotImplementedError()
+        # return res
+
+    def _callable_wrap(self, name: str, *args, **kwargs) -> Any:
+        global MASKED_MUTANTS
+        log_res = self._get_logical_res(LOGICAL_PATH).__getattribute__(name)
+        assert callable(log_res)
+        # convert bound method to free standing function, this allows changing the self argument
+        log_res = log_res.__func__
+
+        logger.debug(f"callable {name} {args} {kwargs} {log_res}")
+
+        diverging_mutants = []
+        companion_mutants = []
+
+        for path, val in self._shadow.items():
+            if path == MAINLINE or path == LOGICAL_PATH:
+                continue
+            val_attr = val.__getattribute__(name)
+            logger.debug(f"{path} {val} {val_attr}")
+            if val_attr == log_res:
+                companion_mutants.append(path)
+            else:
+                diverging_mutants.append(path)
+
+        if FORKING_CONTEXT:
+            original_path = LOGICAL_PATH
+            # Fork if enabled
+            if diverging_mutants:
+                # logger.debug(f"path: {LOGICAL_PATH} masked: {MASKED_MUTANTS} seen: {SEEN_MUTANTS} companion: {companion_mutants} diverging: {diverging_mutants}")
+                # select the path to follow, just pick first
+                path = diverging_mutants[0]
+                if FORKING_CONTEXT.maybe_fork(path):
+                    # we are now in the forked child
+                    MASKED_MUTANTS |= set(companion_mutants + [original_path])
+                    # TODO really return here?
+                    return self._callable_wrap(name, *args, **kwargs)
+                else:
+                    MASKED_MUTANTS |= set(diverging_mutants)
+        else:
+            raise NotImplementedError()
+
+        wrapped_fun = t_wrap(log_res)
+        return wrapped_fun(self, *args, **kwargs)
+
+        # TODO split up arguments as is done in function wrapping (unify if possible)
+        # TODO for each path in self and arguments apply do the function, creating new paths in self if needed
+        # TODO if different functions, mask paths not following mainline
+        # TODO correctly wrap returns into one shadowvariable
+        raise NotImplementedError()
+
     def __repr__(self):
         return f"ShadowVariable({self._shadow})"
 
     def __reduce__(self):
-        return (self.__class__, (self._shadow, ))
+        return (self.__class__, (self._shadow, True)) # TODO test reduce on wrapped object
 
     def _get_paths(self):
         return self._shadow.keys()
@@ -1424,7 +1538,9 @@ class ShadowVariable():
         self._shadow[mut] = res
 
     def _maybe_untaint(self) -> Any:
-        if len(self._shadow) == 1:
+        if self._container:
+            return self
+        elif len(self._shadow) == 1:
             assert MAINLINE in self._shadow, f"{self}"
             return self._shadow[MAINLINE]
         else:
@@ -1453,26 +1569,10 @@ class ShadowVariable():
         shadow = deepcopy(self._shadow)
         for mut in muts:
             shadow.pop(mut, None)
-        return ShadowVariable(shadow)
-
-    def _check_op_available(shadow, op):
-        global STRONGLY_KILLED
-
-        killed = []
-        for k in shadow:
-            if k in [LOGICAL_PATH, MAINLINE]:
-                continue
-            try:
-                shadow.__getattribute__(op)
-            except AttributeError:
-                add_strongly_killed(k)
-                killed.append(k)
-        for k in killed:
-            del shadow[k]
+        return ShadowVariable(shadow, from_mapping=True)
 
     def _do_op_safely(self, ops, paths, left, right, args, kwargs, op):
         global STRONGLY_KILLED
-        try_other_side = False
         
         res = {}
         for k in paths:
@@ -1505,7 +1605,7 @@ class ShadowVariable():
             op,
         )
         # logger.debug("res: %s %s", res, type(res[0]))
-        return ShadowVariable(res)
+        return ShadowVariable(res, from_mapping=True, wraps_container=False)
 
     def _do_bool_op(self, other, op, *args, **kwargs):
         assert len(args) == 0 and len(kwargs) == 0, f"{args} {kwargs}"
@@ -1542,7 +1642,7 @@ class ShadowVariable():
                 op,
             )
 
-            # if there was a preexisint taint of the same name, this mutation was
+            # if there was a pre-existing taint of the same name, this mutation was
             # already executed. So, use that value.
             cs_ = self._do_op_safely(
                 ALLOWED_BOOL_DUNDER_METHODS,
@@ -1555,7 +1655,7 @@ class ShadowVariable():
             )
             res = {**vs_, **vo_, **cs_}
             # logger.debug("res: %s", res)
-            return ShadowVariable(res)
+            return ShadowVariable(res, from_mapping=True, wraps_container=False)
         else:
             res = self._do_op_safely(
                 ALLOWED_BOOL_DUNDER_METHODS,
@@ -1567,77 +1667,7 @@ class ShadowVariable():
                 op,
             )
             # logger.debug("res: %s %s", res, type(res[0]))
-            return ShadowVariable(res)
-
-
-def losing_taint(self):
-    raise NotImplementedError(
-        "Casting to a plain bool loses all taint information. "
-        "Raise exception here to avoid unexpectedly losing information."
-    )
-
-
-def proxy_function(cls, name, f):
-    @wraps(f)
-    def proxied_f(*args, **kwargs):
-        res = f(*args, **kwargs)
-        # logger.debug('%s %s: %s %s -> %s (%s)', cls, name, args, kwargs, res, type(res))
-        return res
-    return proxied_f
-
-
-def taint(orig_class):
-    cls_proxy = partial(proxy_function, orig_class)
-    for func in dir(orig_class):
-        if func in ['__bool__']:
-            setattr(orig_class, func, losing_taint)
-            continue
-        if func in [
-            '_shadow',
-            '__new__', '__init__', '__class__', '__dict__', '__getattribute__', '__repr__'
-        ]:
-             continue
-        orig_func = getattr(orig_class, func)
-        # logging.debug("%s %s", orig_class, func)
-        setattr(orig_class, func, cls_proxy(func, orig_func))
-
-
-    return orig_class
-
-
-@taint
-class t_tuple():
-    def __init__(self, *args, **kwargs):
-        self.val = tuple(*args, **kwargs)
-        self.len = t_combine({MAINLINE: len(self.val)})
-
-    def __iter__(self):
-        for elem in self.val:
-            yield elem
-
-    def __eq__(self, other):
-        res = self.len == other.__len__()
-        if not t_cond(res):
-            return res
-
-        for a, b in zip(self, other):
-            raise NotImplementedError()
-
-        return res
-
-    def __len__(self):
-        return self.len
-
-    def __str__(self):
-        return f"t_tuple {getattr(self, 'len', None)} {getattr(self, 'val', None)}"
-
-    def __repr__(self):
-        return f"t_tuple {getattr(self, 'len', None)} {getattr(self, 'val', None)}"
-
-
-@taint
-class t_list():
-    pass
+            return ShadowVariable(res, from_mapping=True, wraps_container=False)
 
 
 # Init when importing shadow
