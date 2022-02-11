@@ -295,6 +295,7 @@ class Forker():
         os._exit(0)
 
     def wait_for_forks(self, fork_res=None):
+        global PICKLE_LOAD
         global SUBJECT_COUNTER
         global TOOL_COUNTER
         # if child, write results and exit
@@ -331,10 +332,13 @@ class Forker():
                     if result_file.is_file():
                         with open(result_file, 'rb') as f:
                             try:
+                                PICKLE_LOAD = True
                                 child_results = pickle.load(f)
                             except JSONDecodeError:
                                 # Child has not yet written the results.
                                 continue
+                            finally:
+                                PICKLE_LOAD = False
 
                         for res in ['strong', 'masked'] + ['seen'] if EXECUTION_MODE.is_shadow_variant() else ['active']:
                             child_results[res] = set(child_results[res])
@@ -378,7 +382,7 @@ FORKING_CONTEXT: Union[None, Forker] = None
 
 
 def reinit(logical_path: str=None, execution_mode: Union[None, str]=None, no_atexit=False):
-    logger.info("Reinit global shadow state")
+    # logger.info("Reinit global shadow state")
     # initializing shadow
     global LOGICAL_PATH
     global STRONGLY_KILLED
@@ -390,7 +394,9 @@ def reinit(logical_path: str=None, execution_mode: Union[None, str]=None, no_ate
     global FORKING_CONTEXT
     global RESULT_FILE
     global CACHE_PATH
+    global PICKLE_LOAD
 
+    PICKLE_LOAD = False
     RESULT_FILE = os.environ.get('RESULT_FILE')
 
     if logical_path is not None:
@@ -1312,7 +1318,7 @@ DISALLOWED_DUNDER_METHODS = [
     '__bytes__', '__call__', '__cmp__', '__complex__', '__contains__',
     '__delattr__', '__delete__', '__delitem__', '__delslice__',  
     '__enter__', '__exit__', '__fspath__',
-    '__get__', '__getnewargs__', '__getslice__', 
+    '__get__', '__getslice__', 
     '__hash__', '__import__', '__imul__', '__index__',
     '__int__', '__invert__',
     '__ior__', '__iter__', '__ixor__', 
@@ -1340,7 +1346,7 @@ DISALLOWED_DUNDER_METHODS = [
 LIST_OF_IGNORED_DUNDER_METHODS = [
     '__new__', '__init__', '__init_subclass__', '__instancecheck__', '__getattribute__', 
     '__setattr__', '__str__', '__format__', 
-    '__iadd__', '__iand__', '__isub__', 
+    '__iadd__', '__getnewargs__', '__getnewargs_ex__', '__iand__', '__isub__', 
 ]
 
 
@@ -1550,15 +1556,6 @@ class ShadowVariable():
 
         return res
 
-    def __getattr__(self, name: str) -> Any:
-        logger.debug(f"getattr {name}")
-        if name.startswith("_"):
-            res = super(ShadowVariable, self).__getattr__(name)
-            logger.debug(f"res {res}")
-            return res
-        res = object.__getattr__(self, name)
-        raise NotImplementedError()
-
     def __getattribute__(self, name: str) -> Any:
         if name.startswith("_"):
             # __init__ is manually defined for ShadovVariable but can also be later called during usage of ShadowVariable.
@@ -1629,7 +1626,6 @@ class ShadowVariable():
                     if FORKING_CONTEXT.maybe_fork(path):
                         # we are now in the forked child
                         MASKED_MUTANTS |= set(companion_mutants + [original_path])
-                        # TODO really return here?
                         return self._callable_wrap(name, *args, **kwargs)
                     else:
                         MASKED_MUTANTS |= set(diverging_mutants)
@@ -1642,8 +1638,11 @@ class ShadowVariable():
     def __repr__(self):
         return f"ShadowVariable({self._shadow})"
 
-    def __reduce__(self):
-        return (self.__class__, (self._shadow, True)) # TODO test reduce on wrapped object
+    def __getstate__(self) -> dict[int, Any]:
+        return self._shadow
+
+    def __setstate__(self, attributes):
+        self._shadow = attributes
 
     def _get_paths(self):
         return self._shadow.keys()
@@ -1811,23 +1810,25 @@ class ShadowVariable():
 
 
 def t_class(orig_class):
-    # TODO this needs to be inserted by ast_mutator
     orig_new = orig_class.__new__
 
     def wrap_new(cls, *args, **kwargs):
         new = orig_new(cls)
-        obj = ShadowVariable(new, False)
 
-        # only call __init__ if instance of cls is returned
-        # https://docs.python.org/3/reference/datamodel.html#object.__new__
-        if isinstance(new, cls):
-            obj.__init__(*args, **kwargs)
+        if PICKLE_LOAD:
+            # If loading from pickle (happens when combining forks), no need to wrap in ShadowVariable
+            return new
 
-        return obj
+        else:
+            # For actual usage wrap the object inside a ShadowVariable
+            obj = ShadowVariable(new, False)
 
-    def deepcopy(*args, **kwargs):
-        logger.debug("hi")
-        raise NotImplementedError()
+            # only call __init__ if instance of cls is returned
+            # https://docs.python.org/3/reference/datamodel.html#object.__new__
+            if isinstance(new, cls):
+                obj.__init__(*args, **kwargs)
+
+            return obj
 
     orig_class._orig_new = orig_new
     orig_class.__new__ = wrap_new

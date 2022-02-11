@@ -470,6 +470,7 @@ def test_prime(mode):
 #################################################
 # real-world tests for split stream variants
 
+@pytest.mark.skip(reason="slow")
 @pytest.mark.parametrize("mode", SPLIT_STREAM_MODES)
 def test_approx_exp_split_stream(mode):
     from typing import Optional
@@ -704,24 +705,24 @@ def test_class_attr_update_with_taint(mode):
     assert get_killed() == gen_killed([1])
 
 
-@pytest.mark.skip()
+@t_class
+class CondAttrAccess():
+    def __init__(self):
+        self.val = 0
+
+
 @pytest.mark.parametrize("mode", MODES)
 def test_class_cond_attr_access(mode):
-    @t_class
-    class Test():
-        def __init__(self):
-            self.val = 0
 
     @t_wrap
     def func(tainted_int):
-        t = Test()
+        t = CondAttrAccess()
         if t_cond(tainted_int != 0):
             t.val += 1
         return t
     
     reinit(execution_mode=mode, no_atexit=True)
     res = func(t_combine({0: 0, 1: 1}))
-    logger.debug(f"{res} {res.val}")
     t_assert(res.val == 0)
     assert get_killed() == gen_killed([1])
 
@@ -749,9 +750,9 @@ def test_class_cond_attr_access(mode):
 
 # TODO function call different functions
 
-# TODO attribute access fails for some shadow versions
+# TODO attribute access/function call fails for some shadow versions
 
-# TODO attribute access fails for mainline
+# TODO attribute access/function call fails for mainline
 
 
 #################################################
