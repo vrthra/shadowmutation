@@ -236,7 +236,6 @@ class c():
         else:
             # print(f"Mutating:       {node.name}")
             node = self.generic_visit(node)
-            print(node.name, self.in_class)
             if self.mode.is_shadow() and not self.in_class:
                 mutation = ast.parse("""
 @t_wrap
