@@ -1313,6 +1313,7 @@ PASSTHROUGH_DUNDER_METHODS = {
     '__getitem__',
     '__iter__',
     '__next__',
+    '__iter__', 
 }
 
 DISALLOWED_DUNDER_METHODS = [
@@ -1323,7 +1324,7 @@ DISALLOWED_DUNDER_METHODS = [
     '__get__', '__getslice__', 
     '__hash__', '__import__', '__imul__', 
     '__int__', '__invert__',
-    '__ior__', '__iter__', '__ixor__', 
+    '__ior__', '__ixor__', 
     '__next__', '__nonzero__',
     '__pos__', '__prepare__', '__rdiv__',
     '__rdivmod__', '__repr__', '__reversed__',
@@ -1651,26 +1652,72 @@ class ShadowVariable():
         global MASKED_MUTANTS
         log_val = self._get_logical_res(LOGICAL_PATH)
         logical_func, is_builtin = convert_method_to_function(log_val, name)
+        shadow = self._shadow
 
         if is_builtin:
+            # Need some special handling if __next__ is called, it has influence on control flow.
+            # StopIteration is raised once all elements during the iteration have been passed,
+            # this can vary if we have different lengths for the wrapped variables.
+            # Currently assert that all variables always either return something or raise StopIteration in the same call.
+            method_is_next = name == '__next__'
+            if method_is_next:
+                next_returns = 0
+                next_raises = 0
+
             # The method is a builtin, there can not be any mutations in the builtins.
             # Apply the method to each path value and combine the results into a ShadowValue and return that instead.
+            untainted_args = untaint_args(*args, **kwargs)
+
+            # Get the arguments for the current logical path, otherwise use mainline.
+            if LOGICAL_PATH in untainted_args:
+                log_args = untainted_args[LOGICAL_PATH]
+            else:
+                log_args = untainted_args[MAINLINE]
+
+            all_paths = set(shadow.keys()) | set(untainted_args.keys())
             results = {}
-            for path, path_val in self._shadow.items():
-                if path == MAINLINE or path == LOGICAL_PATH:
-                    continue
+            for path in all_paths:
+
+                # If the path value is not the logical/mainline value and is in shadow, just get it.
+                # Otherwise the value might be used several times, in that case make a copy.
+                if path != MAINLINE and path != LOGICAL_PATH and path in shadow:
+                    path_val = shadow[path]
+                else:
+                    path_val = deepcopy(log_val)
+
+                # As for path val, make a copy if needed.
+                if path != MAINLINE and path != LOGICAL_PATH and path in untainted_args:
+                    path_args, path_kwargs = untainted_args[path] or untainted_args.get(MAINLINE)
+                else:
+                    path_args, path_kwargs = deepcopy(log_args)
 
                 path_func, _ = convert_method_to_function(path_val, name)
+
                 if path_func != logical_func:
                     raise NotImplementedError()
 
                 try:
-                    results[path] = logical_func(path_val, *args, **kwargs)
+                    results[path] = logical_func(path_val, *path_args, **path_kwargs)
+                except StopIteration as e:
+                    if method_is_next:
+                        next_raises += 1
+                        continue
+                    else:
+                        raise NotImplementedError()
                 except:
                     raise NotImplementedError()
 
-            # TODO check for SV args and do separate function calls
-            results[LOGICAL_PATH] = logical_func(log_val, *args, **kwargs)
+                if method_is_next:
+                    next_returns += 1
+
+                self._shadow[path] = path_val
+
+            if method_is_next:
+                # OOS: Currently all iterables are expected to iterate the same amount of times.
+                # To support unequal amounts this function needs to support forking.
+                assert next_returns == 0 or next_raises == 0
+                if next_raises > 0:
+                    raise StopIteration
 
             return ShadowVariable(results, from_mapping=True)
         

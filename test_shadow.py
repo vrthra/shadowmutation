@@ -725,7 +725,7 @@ def test_list_mul_tint(mode):
     assert get_killed() == gen_killed([1])
 
 
-@pytest.mark.skip(reason="not implemented (built-in functions): check for SV args and do separate function calls")
+# @pytest.mark.skip(reason="not implemented (built-in functions): check for SV args and do separate function calls")
 @pytest.mark.parametrize("mode", MODES)
 def test_list_insert_tint(mode):
     reinit(execution_mode=mode, no_atexit=True)
@@ -735,7 +735,7 @@ def test_list_insert_tint(mode):
     # insert data at pos defined by tainted int
     data.insert(tainted_int, 'a')
 
-    t_assert(data[0] == 0)
+    t_assert(data[0] == 'a')
     t_assert(data[1] == 1)
     assert get_killed() == gen_killed([1])
 
