@@ -467,6 +467,115 @@ def test_prime(mode):
     assert get_killed() == gen_killed([6, 9, 10, 11, 14, 15, 25, 31, 34, 36, 39, 40, 41, 44, 46, 49])
 
 
+@t_class
+class BankAccount:
+    balance: int
+
+    def __init__(self, initial_balance: int):
+        self.balance = initial_balance
+
+    def is_overdrawn(self) ->None:
+        if t_cond(t_combine({(0): lambda : self.balance >= 100, (1): lambda : self.balance == 100, (2): lambda : self.balance != 100, (3): lambda : self.balance < 100, (4): lambda : self.balance <= 100, (5): lambda : self.balance > 100})):
+            return False
+        elif t_cond(t_combine({(0): lambda : self.balance >= 0, (6): lambda : self.balance == 0, (7): lambda : self.balance != 0, (8): lambda : self.balance < 0, (9): lambda : self.balance <= 0, (10): lambda : self.balance > 0})):
+            return False
+        elif t_cond(t_combine({(0): lambda : self.balance < -100, (11): lambda : self.balance == -100, (12): lambda : self.balance != -100, (13): lambda : self.balance <= -100, (14): lambda : self.balance > -100, (15): lambda : self.balance >= -100})):
+            return True
+        else:
+            return True
+
+    def deposit(self, amount: int) ->None:
+        self.balance += amount
+
+    def withdraw(self, amount: int) ->None:
+        self.balance -= amount
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_bank_accounts(mode):
+
+    @t_wrap
+    def fun() -> None:
+        my_account = BankAccount(10)
+        t_assert(my_account.balance == 10)
+        t_assert(my_account.is_overdrawn() == False)
+
+        my_account.deposit(5)
+        t_assert(my_account.balance == 15)
+        t_assert(my_account.is_overdrawn() == False)
+
+        my_account.withdraw(200)
+        t_assert(my_account.balance == -185)
+        t_assert(my_account.is_overdrawn() == True)
+
+
+    reinit(execution_mode=mode, no_atexit=True)
+    fun()
+    assert get_killed() == gen_killed([2, 3, 4, 6, 7, 8, 9])
+
+
+@t_class
+class BankAccountMut:
+    balance: int
+    overdrawn: bool
+
+    def __init__(self, initial_balance: int):
+        self.balance = initial_balance
+        self.overdrawn = False
+        self.update_overdrawn()
+
+    def update_overdrawn(self) ->None:
+        if t_cond(t_combine({(0): lambda : self.balance >= 100, (1): lambda : self.balance == 100, (2): lambda : self.balance != 100, (3): lambda : self.balance < 100, (4): lambda : self.balance <= 100, (5): lambda : self.balance > 100})):
+            print('not overdrawn')
+            self.overdrawn = False
+        elif t_cond(t_combine({(0): lambda : self.balance >= 0, (6): lambda : self.balance == 0, (7): lambda : self.balance != 0, (8): lambda : self.balance < 0, (9): lambda : self.balance <= 0, (10): lambda : self.balance > 0})):
+            print('all good')
+            self.overdrawn = False
+        elif t_cond(t_combine({(0): lambda : self.balance < -100, (11): lambda : self.balance == -100, (12): lambda : self.balance != -100, (13): lambda : self.balance <= -100, (14): lambda : self.balance > -100, (15): lambda : self.balance >= -100})):
+            print('very overdrawn')
+            self.overdrawn = True
+        else:
+            self.overdrawn = True
+
+    def deposit(self, amount: int) ->None:
+        self.balance += amount
+        self.update_overdrawn()
+
+    def withdraw(self, amount: int) ->None:
+        self.balance -= amount
+        self.update_overdrawn()
+
+    def is_overdrawn(self) ->bool:
+        return self.overdrawn
+
+
+@pytest.mark.skip(reason="todo: return on call to init does not merge fork results")
+@pytest.mark.parametrize("mode", MODES)
+def test_bank_accounts_mut(mode):
+
+    @t_wrap
+    def fun() -> None:
+        my_account = BankAccountMut(10)
+        t_assert(my_account.balance == 10)
+        t_assert(my_account.overdrawn == False)
+
+        my_account.deposit(5)
+        t_assert(my_account.balance == 15)
+        t_assert(my_account.overdrawn == False)
+
+        my_account.withdraw(200)
+        t_assert(my_account.balance == -185)
+        t_assert(my_account.overdrawn == True)
+
+
+    # TODO update call arguments, if they are SV, with the different fork versions after the function call
+    # this can be done for all function calls
+    reinit(execution_mode=mode, no_atexit=True)
+    fun()
+    assert get_killed() == gen_killed([2, 3, 4, 6, 7, 8, 9])
+
+
+
 #################################################
 # real-world tests for split stream variants
 
@@ -547,19 +656,22 @@ def test_approx_exp_split_stream(mode):
 # 'count', 'index']
 
 
-@pytest.mark.skip(reason="not implemented: need to update t_tuple")
 @pytest.mark.parametrize("mode", MODES)
 def test_tuple_eq_with_tint_elem(mode):
-    reinit(execution_mode=mode, no_atexit=True)
-    tainted_int = t_combine({0: 0, 1: 1})
-    data = t_tuple((1, 2, 3, tainted_int))
+    @t_wrap
+    def fun():
+        tainted_int = t_combine({0: 0, 1: 1})
+        data = ShadowVariable((1, 2, 3, tainted_int), False)
+        return data
 
-    t_assert(data == (1, 2, 3, 0))
-    assert get_killed() == gen_killed({1: True})
+    reinit(execution_mode=mode, no_atexit=True)
+    res = fun()
+    t_assert(res == (1, 2, 3, 0))
+    assert get_killed() == gen_killed([1])
 
     reinit(execution_mode=mode, no_atexit=True)
-    t_assert((1, 2, 3, 0) == data)
-    assert get_killed() == gen_killed({1: True})
+    t_assert((1, 2, 3, 0) == res)
+    assert get_killed() == gen_killed([1])
 
 
 #################################################
@@ -573,53 +685,59 @@ def test_tuple_eq_with_tint_elem(mode):
 # '__str__', '__subclasshook__',
 # 'append', 'clear', 'copy', 'count', 'extend', 'index', 'insert', 'pop', 'remove', 'reverse', 'sort']
 
-@pytest.mark.skip(reason="not implemented: need to hook equal of list")
 @pytest.mark.parametrize("mode", MODES)
 def test_list_eq_with_tint_elem(mode):
+    @t_wrap
+    def fun():
+        tainted_int = t_combine({0: 0, 1: 1})
+        data = [1, 2, 3, tainted_int]
+        return data
+
     reinit(execution_mode=mode, no_atexit=True)
-    tainted_int = t_combine({0: 0, 1: 1})
-    data = [1, 2, 3, tainted_int]
-
+    data = fun()
     t_assert(data == [1, 2, 3, 0])
-    assert get_killed()[0] == {1: True}
+    assert get_killed() == gen_killed([1])
 
 
-@pytest.mark.skip(reason="not implemented: list len dependent on tainted int")
 @pytest.mark.parametrize("mode", MODES)
 def test_list_mul_tint(mode):
-    data = []
-    tainted_int = t_combine({0: 0, 1: 1})
+    @t_wrap
+    def fun():
+        # data = ShadowVariable([], False)
+        tainted_int = t_combine({0: 0, 1: 2})
 
-    # create a list where the length is dependent on the tainted int
-    new_data = [1]*tainted_int
-    data.extend(new_data)
+        # create a list where the length is dependent on the tainted int
+        data = ShadowVariable([1], False)*tainted_int
+        # TODO data.extend(new_data)
+        res = 0
+        ii = 0
+        while True:
+            if t_cond(ii > data.__len__() - 1):
+                break
+            add = data[ii]
+            res += add
+            ii += 1
+        return res
 
-    # this should cause a weakly killed
-    # for val in data:
-    #     assert val == 1
-
-    # this should also cause a weakly killed
-    result = sum(data)
-    assert result == 0
+    reinit(execution_mode=mode, no_atexit=True)
+    result = fun()
+    t_assert(result == 0)
+    assert get_killed() == gen_killed([1])
 
 
-@pytest.mark.skip(reason="not implemented: similar problems for pop, remove, index")
+@pytest.mark.skip(reason="not implemented (built-in functions): check for SV args and do separate function calls")
 @pytest.mark.parametrize("mode", MODES)
 def test_list_insert_tint(mode):
-    data = [1, 2, 3]
+    reinit(execution_mode=mode, no_atexit=True)
+    data = ShadowVariable([1, 2, 3], False)
     tainted_int = t_combine({0: 0, 1: 1})
 
     # insert data at pos defined by tainted int
     data.insert(tainted_int, 'a')
 
-    for val in data:
-        print(val)
-
-    # TODO need to taint values at the involved positions
-    # data[0] does not necessarily need to be tainted
-    # data[1] does to be tainted
-    assert data[0] == 'a'
-    assert data[1] == 1
+    t_assert(data[0] == 0)
+    t_assert(data[1] == 1)
+    assert get_killed() == gen_killed([1])
 
 
 
@@ -726,7 +844,7 @@ def test_class_cond_attr_access(mode):
     t_assert(res.val == 0)
     assert get_killed() == gen_killed([1])
 
-# TODO fork in init
+# TODO mutation changes control flow as well as value, followed by fork where companion mutation 
 
 # TODO recursive wrapped object init
 
@@ -740,19 +858,11 @@ def test_class_cond_attr_access(mode):
 
 # TODO mutation in class function
 
-# TODO mutation in class method
-
-# TODO init with vanilla values
-
-# TODO init with shadow values
-
 # TODO function call same function for each shadow version should execute unified
 
-# TODO function call different functions
+# TODO attribute access/function call raises exception for some shadow versions
 
-# TODO attribute access/function call fails for some shadow versions
-
-# TODO attribute access/function call fails for mainline
+# TODO attribute access/function call raises exception for mainline
 
 
 #################################################

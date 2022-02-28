@@ -1026,7 +1026,7 @@ def shadow_assert(cmp_result):
         # Do the actual assertion as would be done in the unchanged program but only for mainline execution
         if LOGICAL_PATH == MAINLINE:
             # This assert should never fail for a green test suite
-            assert cmp_result._get(MAINLINE), f"{cmp_result}"
+            assert cmp_result._get(MAINLINE) is True, f"{cmp_result}"
 
         for path, res in cmp_result._all_path_results(SEEN_MUTANTS, MASKED_MUTANTS):
             assert type(res) == bool
@@ -1034,7 +1034,7 @@ def shadow_assert(cmp_result):
                 add_strongly_killed(path)
 
     else:
-        if not cmp_result: # if assert is false
+        if not cmp_result is True:
             if LOGICAL_PATH is not MAINLINE:
                 # If we are not following mainline, mark all active mutants as killed
                 for mut in active_mutants():
@@ -1263,6 +1263,8 @@ ALLOWED_UNARY_DUNDER_METHODS = {
     '__abs__':   lambda args, kwargs, a, _: abs(a, *args, **kwargs),
     '__round__': lambda args, kwargs, a, _: round(a, *args, **kwargs),
     '__neg__':   lambda args, kwargs, a, _: -a,
+    '__len__':   lambda args, kwargs, a, _: len(a),
+    '__index__': lambda args, kwargs, a, _: a.__index__(),
 }
 
 ALLOWED_BOOL_DUNDER_METHODS = {
@@ -1319,7 +1321,7 @@ DISALLOWED_DUNDER_METHODS = [
     '__delattr__', '__delete__', '__delitem__', '__delslice__',  
     '__enter__', '__exit__', '__fspath__',
     '__get__', '__getslice__', 
-    '__hash__', '__import__', '__imul__', '__index__',
+    '__hash__', '__import__', '__imul__', 
     '__int__', '__invert__',
     '__ior__', '__iter__', '__ixor__', 
     '__next__', '__nonzero__',
@@ -1329,7 +1331,6 @@ DISALLOWED_DUNDER_METHODS = [
     '__setslice__', '__sizeof__', '__subclasscheck__', '__subclasses__',
     '__divmod__',
     '__div__',
-    '__len__',
     
 
     # python enforces that the specific type is returned,
@@ -1403,59 +1404,122 @@ class ShadowVariable():
         return self._callable_wrap("{method}", *args, **kwargs)
         """.strip())
 
+    def _init_from_object(self, obj: Any):
+        shadow = {}
+        value_type = type(obj)
 
-    def __init__(self, values: dict[int, Any], from_mapping: bool):
-        value_type = type(values)
+        # TODO optionally make sure there are no nested shadow variables in the values
+        if value_type == ShadowVariable:
+            shadow = obj._shadow
+
+        elif value_type == tuple:
+            # handle tuple values
+            combined = {}
+            combined[MAINLINE] = []
+            for elem in obj:
+                if type(elem) == ShadowVariable:
+                    elem_shadow = elem._shadow
+                    # make a copy for each path that is new
+                    for path in elem_shadow.keys():
+                        if path not in combined:
+                            combined[path] = deepcopy(combined[MAINLINE])
+
+                    # append the corresponding path value for each known path
+                    for path in combined.keys():
+                        if path in elem_shadow:
+                            combined[path].append(elem_shadow[path])
+                        else:
+                            combined[path].append(elem_shadow[MAINLINE])
+
+                else:
+                    for elems in combined.values():
+                        elems.append(elem)
+
+            # convert each path value back to a tuple
+            for path in combined.keys():
+                combined[path] = tuple(combined[path])
+
+            shadow = combined
+
+        elif value_type == list:
+            # handle list values
+            combined = {}
+            combined[MAINLINE] = []
+            for elem in obj:
+                if type(elem) == ShadowVariable:
+                    elem_shadow = elem._shadow
+                    # make a copy for each path that is new
+                    for path in elem_shadow.keys():
+                        if path not in combined:
+                            combined[path] = deepcopy(combined[MAINLINE])
+
+                    # append the corresponding path value for each known path
+                    for path in combined.keys():
+                        if path in elem_shadow:
+                            combined[path].append(elem_shadow[path])
+                        else:
+                            combined[path].append(elem_shadow[MAINLINE])
+
+                else:
+                    for elems in combined.values():
+                        elems.append(elem)
+
+            shadow = combined
+            
+        else:
+            shadow[MAINLINE] = obj
+
+        self._shadow = shadow
+
+    def _init_from_mapping(self, values: dict):
+        assert type(values) == dict
 
         combined = {}
-        if not from_mapping:
-            # TODO optionally make sure there are no nested shadow variables in the values
-            if value_type == ShadowVariable:
-                self._shadow = values._shadow
-                return
 
-            combined[MAINLINE] = values
-        else:
-            assert value_type == dict
-
-            try:
-                mainline_val = values[MAINLINE]
-            except KeyError as e:
-                # mainline value is faulty, this can happen in non-mainline paths
-                # example: non-mainline path goes out of bounds on array accesses
-                # mark all active mutations and/or current logical path as killed
-                # also if forking, stop the fork, for shadow execution just return to wrapper
-                if LOGICAL_PATH != MAINLINE:
-                    add_strongly_killed(LOGICAL_PATH)
-                if SELECTED_MUTANT == None:
-                    for mut in active_mutants():
-                        add_strongly_killed(mut)
-                    if FORKING_CONTEXT is not None:
-                        assert not FORKING_CONTEXT.is_parent
-                        FORKING_CONTEXT.child_end() # child fork ends here
-                    else:
-                        raise ShadowException(e)
+        try:
+            mainline_val = values[MAINLINE]
+        except KeyError as e:
+            # mainline value is faulty, this can happen in non-mainline paths
+            # example: non-mainline path goes out of bounds on array accesses
+            # mark all active mutations and/or current logical path as killed
+            # also if forking, stop the fork, for shadow execution just return to wrapper
+            if LOGICAL_PATH != MAINLINE:
+                add_strongly_killed(LOGICAL_PATH)
+            if SELECTED_MUTANT == None:
+                for mut in active_mutants():
+                    add_strongly_killed(mut)
+                if FORKING_CONTEXT is not None:
+                    assert not FORKING_CONTEXT.is_parent
+                    FORKING_CONTEXT.child_end() # child fork ends here
                 else:
                     raise ShadowException(e)
-            if type(mainline_val) == ShadowVariable:
-                combined = mainline_val._shadow
             else:
-                combined[MAINLINE] = mainline_val
-            for mut_id, val in values.items():
-                if mut_id == MAINLINE:
-                    continue
+                raise ShadowException(e)
+        if type(mainline_val) == ShadowVariable:
+            combined = mainline_val._shadow
+        else:
+            combined[MAINLINE] = mainline_val
+        for mut_id, val in values.items():
+            if mut_id == MAINLINE:
+                continue
 
-                if type(val) == ShadowVariable:
-                    val = val._shadow
-                    if mut_id in val:
-                        combined[mut_id] = val[mut_id]
-                    else:
-                        combined[mut_id] = val[MAINLINE]
+            if type(val) == ShadowVariable:
+                val = val._shadow
+                if mut_id in val:
+                    combined[mut_id] = val[mut_id]
                 else:
-                    assert mut_id not in combined
-                    combined[mut_id] = val
+                    combined[mut_id] = val[MAINLINE]
+            else:
+                assert mut_id not in combined
+                combined[mut_id] = val
 
         self._shadow = combined
+
+    def __init__(self, values: Any, from_mapping: bool):
+        if not from_mapping:
+            self._init_from_object(values)
+        else:
+            self._init_from_mapping(values)
 
     def _duplicate_mainline(self, new_path):
         assert new_path not in self._shadow
@@ -1593,15 +1657,25 @@ class ShadowVariable():
             # Apply the method to each path value and combine the results into a ShadowValue and return that instead.
             results = {}
             for path, path_val in self._shadow.items():
+                if path == MAINLINE or path == LOGICAL_PATH:
+                    continue
+
                 path_func, _ = convert_method_to_function(path_val, name)
                 if path_func != logical_func:
                     raise NotImplementedError()
-                results[path] = logical_func(path_val, *args, **kwargs)
+
+                try:
+                    results[path] = logical_func(path_val, *args, **kwargs)
+                except:
+                    raise NotImplementedError()
+
+            # TODO check for SV args and do separate function calls
+            results[LOGICAL_PATH] = logical_func(log_val, *args, **kwargs)
 
             return ShadowVariable(results, from_mapping=True)
         
         else:
-            # Treat this method as a simple function call, the self parameter is the ShadowVariable.
+            # Treat this method as a forkable function call, the self parameter is the ShadowVariable.
             diverging_mutants = []
             companion_mutants = []
 

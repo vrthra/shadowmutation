@@ -14,6 +14,7 @@ from multiprocessing import Pool
 
 
 TAINT_MEMBERS = [
+    "t_class",
     "t_wrap",
     "t_combine",
     "t_gather_results",
@@ -167,6 +168,7 @@ class ShadowExecutionTransformer(ast.NodeTransformer):
         super().__init__()
         self.mutation_counter = MutationCounter()
         self.mode = mode
+        self.in_class = False
         self.mutations = []
         if ignore_regex is not None:
             self.ignore_regex = re.compile(ignore_regex)
@@ -211,6 +213,22 @@ class ShadowExecutionTransformer(ast.NodeTransformer):
 
         return node
 
+    def visit_ClassDef(self, node):
+        self.in_class = True
+        node = self.generic_visit(node)
+
+        # For shadow mode add class annotation
+        if self.mode.is_shadow():
+            mutation = ast.parse("""
+@t_class
+class c():
+    pass
+            """).body[0]
+            node.decorator_list.append(mutation.decorator_list[0])
+
+        self.in_class = False
+        return node
+
     def visit_FunctionDef(self, node):
         if self.ignore_regex is not None and self.ignore_regex.match(node.name):
             # print(f"*NOT* Mutating: {node.name}")
@@ -218,7 +236,8 @@ class ShadowExecutionTransformer(ast.NodeTransformer):
         else:
             # print(f"Mutating:       {node.name}")
             node = self.generic_visit(node)
-            if self.mode.is_shadow():
+            print(node.name, self.in_class)
+            if self.mode.is_shadow() and not self.in_class:
                 mutation = ast.parse("""
 @t_wrap
 def f():
@@ -339,8 +358,10 @@ def f():
         
 
     def visit_AugAssign(self, node):
-        adbg(node)
-        raise NotImplementedError()
+        node = self.generic_visit(node)
+        return node
+        # adbg(node)
+        # raise NotImplementedError()
     #     node = self.generic_visit(node)
     #     def change_to_tainted_call(call_id):
     #         global mutation_counter
@@ -557,7 +578,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-# TODO tainting classes, see test_shadow
-# TODO do not mutate __new__ functions of classes
