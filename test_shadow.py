@@ -549,7 +549,6 @@ class BankAccountMut:
         return self.overdrawn
 
 
-@pytest.mark.skip(reason="todo: return on call to init does not merge fork results")
 @pytest.mark.parametrize("mode", MODES)
 def test_bank_accounts_mut(mode):
 

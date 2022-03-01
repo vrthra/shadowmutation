@@ -28,6 +28,10 @@ from typing import Union
 logging.basicConfig(stream=sys.stdout, level=logging.DEBUG, format='%(process)d %(filename)s:%(lineno)s %(levelname)s %(message)s')
 logger = logging.getLogger(__name__)
 
+
+SV = TypeVar('SV', bound="ShadowVariable")
+
+
 # This is used to decide what return values should be untainted when returning from a function.
 PRIMITIVE_TYPES = [bool, int, float]
 
@@ -282,11 +286,20 @@ class Forker():
             results['subject_count'] = SUBJECT_COUNTER
             results['subject_count_lines'] = {'::'.join(str(a) for a in k): v for k, v in SUBJECT_COUNTER_DICT.items()}
             results['tool_count'] = TOOL_COUNTER
-            if type(fork_res) == ShadowVariable:
-                results['fork_res'] = fork_res
-            else:
-                assert type(fork_res) != dict
-                results['fork_res'] = fork_res
+            return_val, args, kwargs = fork_res
+            assert type(return_val) != dict
+
+            results_args = {}
+            for ii, arg in enumerate(args):
+                if type(arg) == ShadowVariable:
+                    results_args[ii] = arg
+
+            results_kwargs = {}
+            for kk, val in kwargs.items():
+                if type(val) == ShadowVariable:
+                    results_kwargs[kk] = val
+
+            results['fork_res'] = (return_val, results_args, results_kwargs)
             # logger.debug(f"child results to write: {results}")
             pickle.dump(results, f)
 
@@ -294,7 +307,7 @@ class Forker():
         # but this is a prototype
         os._exit(0)
 
-    def wait_for_forks(self, fork_res=None):
+    def wait_for_forks(self, fork_res: dict[int: Any]=None):
         global PICKLE_LOAD
         global SUBJECT_COUNTER
         global TOOL_COUNTER
@@ -303,7 +316,12 @@ class Forker():
             self.child_end(fork_res)
 
         # wait for all child processes to end
-        combined_fork_res = [get_active_shadow(fork_res, SEEN_MUTANTS, MASKED_MUTANTS)]
+        if fork_res is not None:
+            return_val, _, _ = fork_res
+        else:
+            return_val = None
+
+        combined_fork_res = [get_active_shadow(return_val, SEEN_MUTANTS, MASKED_MUTANTS)]
         all_results = t_get_killed()
         while True:
             is_done = True
@@ -758,8 +776,17 @@ def fork_wrap(f, *args, **kwargs):
 
     push_cache_stack()
     res = call_maybe_cache(f, *args, **kwargs)
-    combined_results = FORKING_CONTEXT.wait_for_forks(fork_res=res)
+    combined_results = FORKING_CONTEXT.wait_for_forks(fork_res=(res, args, kwargs))
     pop_cache_stack()
+
+    # Filter args and kwargs for currently available, they will be updated with the fork values.
+    for arg in args:
+        if type(arg) == ShadowVariable:
+            arg._keep_active(SEEN_MUTANTS, MASKED_MUTANTS)
+
+    for arg in kwargs.values():
+        if type(arg) == ShadowVariable:
+            arg._keep_active(SEEN_MUTANTS, MASKED_MUTANTS)
 
     FORKING_CONTEXT = old_forking_context
     MASKED_MUTANTS = old_masked_mutants
@@ -767,10 +794,18 @@ def fork_wrap(f, *args, **kwargs):
     res = ShadowVariable(combined_results[0], from_mapping=True)
 
     for child_res in combined_results[1:]:
-        child_fork_res = child_res['fork_res']
+        child_fork_res, child_fork_args, child_fork_kwargs = child_res['fork_res']
         seen = child_res['seen']
         masked = child_res['masked']
         res._merge(child_fork_res, seen, masked)
+
+        # Update the args with the fork values, this is for functions that mutate the arguments.
+        for ii, val in child_fork_args.items():
+            args[ii]._merge(val, seen, masked)
+
+        for key, val in child_fork_kwargs.items():
+            kwargs[key]._merge(val, seen, masked)
+
 
     # If only mainline in return value untaint it
     return res._maybe_untaint()
@@ -1370,9 +1405,6 @@ def convert_method_to_function(obj: object, method_name: str) -> Tuple[Callable,
         return method.__func__, False
 
 
-SV = TypeVar('SV', bound="ShadowVariable")
-
-
 class ShadowVariable():
     _shadow: dict[int, Any]
     __slots__ = ['_shadow']
@@ -1731,7 +1763,6 @@ class ShadowVariable():
                     continue
 
                 val_func, _ = convert_method_to_function(val, name)
-                logger.debug(f"{path} {val} {val_func}")
                 if val_func == logical_func:
                     companion_mutants.append(path)
                 else:
@@ -1787,9 +1818,8 @@ class ShadowVariable():
                 continue
             yield path, self._get(path)
 
-        for path in seen_mutants - masked_mutants:
-            if path not in paths:
-                yield path, self._get(MAINLINE)
+        for path in seen_mutants - masked_mutants - paths:
+            yield path, self._get(MAINLINE)
 
     def _add_mut_result(self, mut: int, res: Any) -> None:
         assert mut not in self._shadow
