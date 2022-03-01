@@ -16,6 +16,17 @@
             },
         },
         {
+            "name": "split",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "env": {
+                "PYTHONPATH": ".",
+                "EXECUTION_MODE": "split"
+            },
+        },
+        {
             "name": "traditional",
             "type": "python",
             "request": "launch",

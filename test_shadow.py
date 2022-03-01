@@ -1,3 +1,4 @@
+import os
 import pytest
 import logging
 logger = logging.getLogger(__name__)
@@ -578,7 +579,7 @@ def test_bank_accounts_mut(mode):
 #################################################
 # real-world tests for split stream variants
 
-@pytest.mark.skip(reason="slow")
+@pytest.mark.skipif(os.environ.get("TEST_SKIP_SPLIT_MODES"), reason="Skip split variant tests.")
 @pytest.mark.parametrize("mode", SPLIT_STREAM_MODES)
 def test_approx_exp_split_stream(mode):
     from typing import Optional
@@ -630,8 +631,6 @@ def test_approx_exp_split_stream(mode):
         t_assert(res == 103)
 
     reinit(execution_mode=mode, no_atexit=True)
-
-    test_approx_exp()
 
     try:
         test_approx_exp()

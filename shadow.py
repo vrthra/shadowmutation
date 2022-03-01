@@ -286,20 +286,23 @@ class Forker():
             results['subject_count'] = SUBJECT_COUNTER
             results['subject_count_lines'] = {'::'.join(str(a) for a in k): v for k, v in SUBJECT_COUNTER_DICT.items()}
             results['tool_count'] = TOOL_COUNTER
-            return_val, args, kwargs = fork_res
-            assert type(return_val) != dict
+            if fork_res is None:
+                results['fork_res'] = None
+            else:
+                return_val, args, kwargs = fork_res
+                assert type(return_val) != dict
 
-            results_args = {}
-            for ii, arg in enumerate(args):
-                if type(arg) == ShadowVariable:
-                    results_args[ii] = arg
+                results_args = {}
+                for ii, arg in enumerate(args):
+                    if type(arg) == ShadowVariable:
+                        results_args[ii] = arg
 
-            results_kwargs = {}
-            for kk, val in kwargs.items():
-                if type(val) == ShadowVariable:
-                    results_kwargs[kk] = val
+                results_kwargs = {}
+                for kk, val in kwargs.items():
+                    if type(val) == ShadowVariable:
+                        results_kwargs[kk] = val
 
-            results['fork_res'] = (return_val, results_args, results_kwargs)
+                results['fork_res'] = (return_val, results_args, results_kwargs)
             # logger.debug(f"child results to write: {results}")
             pickle.dump(results, f)
 

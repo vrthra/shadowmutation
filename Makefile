@@ -28,6 +28,9 @@ dev:
 test:
 	python3 -m pytest --log-cli-level=DEBUG --log-format="%(levelname)s %(process)d %(filename)s:%(lineno)s %(message)s"
 
+test-shadow:
+	TEST_SKIP_SPLIT_MODES=1 python3 -m pytest --log-cli-level=DEBUG --log-format="%(levelname)s %(process)d %(filename)s:%(lineno)s %(message)s"
+
 
 tmp:
 	mkdir -p tmp
