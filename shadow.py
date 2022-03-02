@@ -1,5 +1,4 @@
 # mypy: ignore-errors
-# This file requires too much metaprogramming to provide correct typing for mypy.
 
 from json.decoder import JSONDecodeError
 import pickle
@@ -11,7 +10,7 @@ import time
 import atexit
 import traceback
 import types
-from collections import Counter
+from collections.abc import Iterator
 from typing import Any, Callable, TypeVar, Tuple
 from contextlib import contextmanager
 from collections import defaultdict
@@ -797,17 +796,19 @@ def fork_wrap(f, *args, **kwargs):
     res = ShadowVariable(combined_results[0], from_mapping=True)
 
     for child_res in combined_results[1:]:
-        child_fork_res, child_fork_args, child_fork_kwargs = child_res['fork_res']
         seen = child_res['seen']
         masked = child_res['masked']
-        res._merge(child_fork_res, seen, masked)
+        fork_res = child_res['fork_res']
+        if fork_res is not None:
+            child_fork_res, child_fork_args, child_fork_kwargs = fork_res
+            res._merge(child_fork_res, seen, masked)
 
-        # Update the args with the fork values, this is for functions that mutate the arguments.
-        for ii, val in child_fork_args.items():
-            args[ii]._merge(val, seen, masked)
+            # Update the args with the fork values, this is for functions that mutate the arguments.
+            for ii, val in child_fork_args.items():
+                args[ii]._merge(val, seen, masked)
 
-        for key, val in child_fork_kwargs.items():
-            kwargs[key]._merge(val, seen, masked)
+            for key, val in child_fork_kwargs.items():
+                kwargs[key]._merge(val, seen, masked)
 
 
     # If only mainline in return value untaint it
@@ -1348,10 +1349,10 @@ ALLOWED_BOOL_DUNDER_METHODS = {
 
 PASSTHROUGH_DUNDER_METHODS = {
     # '__init__' is already manually defined, after instantiation of SV the passthrough will happen through __getattribute__
-    '__getitem__',
     '__iter__',
     '__next__',
-    '__iter__', 
+    '__setitem__',
+    '__getitem__',
 }
 
 DISALLOWED_DUNDER_METHODS = [
@@ -1360,13 +1361,13 @@ DISALLOWED_DUNDER_METHODS = [
     '__delattr__', '__delete__', '__delitem__', '__delslice__',  
     '__enter__', '__exit__', '__fspath__',
     '__get__', '__getslice__', 
-    '__hash__', '__import__', '__imul__', 
+    '__import__', '__imul__', 
     '__int__', '__invert__',
     '__ior__', '__ixor__', 
-    '__next__', '__nonzero__',
+    '__nonzero__',
     '__pos__', '__prepare__', '__rdiv__',
     '__rdivmod__', '__repr__', '__reversed__',
-    '__set__', '__setitem__',
+    '__set__',
     '__setslice__', '__sizeof__', '__subclasscheck__', '__subclasses__',
     '__divmod__',
     '__div__',
@@ -1501,6 +1502,36 @@ class ShadowVariable():
                         elems.append(elem)
 
             shadow = combined
+
+        elif value_type == set:
+            combined = {}
+            combined[MAINLINE] = []
+            for elem in obj:
+                if type(elem) == ShadowVariable:
+                    elem_shadow = elem._shadow
+                    # make a copy for each path that is new
+                    for path in elem_shadow.keys():
+                        if path not in combined:
+                            combined[path] = deepcopy(combined[MAINLINE])
+
+                    # append the corresponding path value for each known path
+                    for path in combined.keys():
+                        if path in elem_shadow:
+                            combined[path].append(elem_shadow[path])
+                        else:
+                            combined[path].append(elem_shadow[MAINLINE])
+
+                else:
+                    for elems in combined.values():
+                        elems.append(elem)
+
+            # convert each path value back to a tuple
+            for path in combined.keys():
+                combined[path] = set(combined[path])
+
+            shadow = combined
+
+        # TODO support dict
             
         else:
             shadow[MAINLINE] = obj
@@ -1683,6 +1714,20 @@ class ShadowVariable():
 
         return ShadowVariable(results, from_mapping=True)
 
+    def __hash__(self) -> int:
+        """For ShadowVariable wrapped object, there are two contexts where __hash__ can be used.
+        One is during normal usage of hash(sv) or sv.__hash__(), the returned value should be a ShadowVariable.
+        (Note that the first version checks that the return value is a int, making this impossible.)
+        The second usage is during built-in functions such as initialization of set or dict objects. To support these
+        objects it is necessary to return an actual hash. (Or alternatively create a substitution class, however,
+        this requires a alternative syntax for dictionaries, for example: {key: val} -> ShadowVariableSet([(key, val), ..]).
+        These are solvable problems but out of scope.)
+        
+        Currently only a combined hash of the different path ids and path values is returned and the context where a
+        ShadowVariable should be returned is ignored."""
+        # OOS: How to detect that __hash__ is called in a context that should return a SV instead of the current implementation?
+        return hash(tuple(self._shadow.items()))
+
     def _callable_wrap(self, name: str, *args, **kwargs) -> Any:
         global MASKED_MUTANTS
         log_val = self._get_logical_res(LOGICAL_PATH)
@@ -1712,24 +1757,32 @@ class ShadowVariable():
             all_paths = set(shadow.keys()) | set(untainted_args.keys())
             results = {}
             for path in all_paths:
+                if path == MAINLINE and LOGICAL_PATH != MAINLINE and LOGICAL_PATH in all_paths:
+                    continue
 
-                # If the path value is not the logical/mainline value and is in shadow, just get it.
                 # Otherwise the value might be used several times, in that case make a copy.
-                if path != MAINLINE and path != LOGICAL_PATH and path in shadow:
+                if path in shadow:
                     path_val = shadow[path]
                 else:
-                    path_val = deepcopy(log_val)
+                    path_val = log_val
+
+                # If the path value is the logical/mainline value copy it as it might be used several times.
+                # Note that the copy step can change the actual function being called, for example a dict_keyiterator
+                # will be turned into a list_iterator. For this reason, avoid copying for __next__, there is no need
+                # for a copy anyway as __next__ does not take arguments.
+                if not method_is_next and (path == MAINLINE or path == LOGICAL_PATH):
+                    path_val = deepcopy(path_val)
+
+                # Check that path and log would use the same function.
+                path_func, _ = convert_method_to_function(path_val, name)
+                if path_func != logical_func:
+                    raise NotImplementedError()
 
                 # As for path val, make a copy if needed.
                 if path != MAINLINE and path != LOGICAL_PATH and path in untainted_args:
                     path_args, path_kwargs = untainted_args[path] or untainted_args.get(MAINLINE)
                 else:
                     path_args, path_kwargs = deepcopy(log_args)
-
-                path_func, _ = convert_method_to_function(path_val, name)
-
-                if path_func != logical_func:
-                    raise NotImplementedError()
 
                 try:
                     results[path] = logical_func(path_val, *path_args, **path_kwargs)
@@ -1739,7 +1792,12 @@ class ShadowVariable():
                         continue
                     else:
                         raise NotImplementedError()
-                except:
+                except KeyError as e:
+                    # TODO handle exceptions in method calls
+                    raise ShadowException(e)
+                except Exception as e:
+                    message = traceback.format_exc()
+                    logger.error(f"Error: {message}")
                     raise NotImplementedError()
 
                 if method_is_next:

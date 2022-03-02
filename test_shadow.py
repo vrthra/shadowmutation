@@ -568,8 +568,6 @@ def test_bank_accounts_mut(mode):
         t_assert(my_account.overdrawn == True)
 
 
-    # TODO update call arguments, if they are SV, with the different fork versions after the function call
-    # this can be done for all function calls
     reinit(execution_mode=mode, no_atexit=True)
     fun()
     assert get_killed() == gen_killed([2, 3, 4, 6, 7, 8, 9])
@@ -578,6 +576,7 @@ def test_bank_accounts_mut(mode):
 
 #################################################
 # real-world tests for split stream variants
+
 
 @pytest.mark.skipif(os.environ.get("TEST_SKIP_SPLIT_MODES"), reason="Skip split variant tests.")
 @pytest.mark.parametrize("mode", SPLIT_STREAM_MODES)
@@ -646,12 +645,6 @@ def test_approx_exp_split_stream(mode):
 
 #################################################
 # tests for tuple
-# ['__add__', '__class__', '__class_getitem__', '__contains__', '__delattr__', '__dir__',
-# '__doc__', '__eq__', '__format__', '__ge__', '__getattribute__', '__getitem__', '__getnewargs__',
-# '__gt__', '__hash__', '__init__', '__init_subclass__', '__iter__', '__le__', '__len__',
-# '__lt__', '__mul__', '__ne__', '__new__', '__reduce__', '__reduce_ex__', '__repr__',
-# '__rmul__', '__setattr__', '__sizeof__', '__str__', '__subclasshook__',
-# 'count', 'index']
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -674,14 +667,7 @@ def test_tuple_eq_with_tint_elem(mode):
 
 #################################################
 # tests for list
-# ['__add__', '__class__', '__class_getitem__', '__contains__', '__delattr__',
-# '__delitem__', '__dir__', '__doc__', '__eq__', '__format__', '__ge__',
-# '__getattribute__', '__getitem__', '__gt__', '__hash__', '__iadd__', '__imul__',
-# '__init__', '__init_subclass__', '__iter__', '__le__', '__len__', '__lt__',
-# '__mul__', '__ne__', '__new__', '__reduce__', '__reduce_ex__', '__repr__',
-# '__reversed__', '__rmul__', '__setattr__', '__setitem__', '__sizeof__',
-# '__str__', '__subclasshook__',
-# 'append', 'clear', 'copy', 'count', 'extend', 'index', 'insert', 'pop', 'remove', 'reverse', 'sort']
+
 
 @pytest.mark.parametrize("mode", MODES)
 def test_list_eq_with_tint_elem(mode):
@@ -705,8 +691,9 @@ def test_list_mul_tint(mode):
         tainted_int = t_combine({0: 0, 1: 2})
 
         # create a list where the length is dependent on the tainted int
-        data = ShadowVariable([1], False)*tainted_int
-        # TODO data.extend(new_data)
+        data = ShadowVariable([], False)
+        new_data = ShadowVariable([1], False)*tainted_int
+        data.extend(new_data)
         res = 0
         ii = 0
         while True:
@@ -723,7 +710,6 @@ def test_list_mul_tint(mode):
     assert get_killed() == gen_killed([1])
 
 
-# @pytest.mark.skip(reason="not implemented (built-in functions): check for SV args and do separate function calls")
 @pytest.mark.parametrize("mode", MODES)
 def test_list_insert_tint(mode):
     reinit(execution_mode=mode, no_atexit=True)
@@ -742,46 +728,72 @@ def test_list_insert_tint(mode):
 
 #################################################
 # tests for set
-# ['__and__', '__class__', '__class_getitem__', '__contains__', '__delattr__', '__dir__',
-# '__doc__', '__eq__', '__format__', '__ge__', '__getattribute__', '__gt__', '__hash__',
-# '__iand__', '__init__', '__init_subclass__', '__ior__', '__isub__', '__iter__', '__ixor__',
-# '__le__', '__len__', '__lt__', '__ne__', '__new__', '__or__', '__rand__', '__reduce__',
-# '__reduce_ex__', '__repr__', '__ror__', '__rsub__', '__rxor__', '__setattr__', '__sizeof__',
-# '__str__', '__sub__', '__subclasshook__', '__xor__',
-# 'add', 'clear', 'copy', 'difference', 'difference_update', 'discard', 'intersection',
-# 'intersection_update', 'isdisjoint', 'issubset', 'issuperset', 'pop', 'remove',
-# 'symmetric_difference', 'symmetric_difference_update', 'union', 'update']
 
 
+@pytest.mark.parametrize("mode", MODES)
+def test_set_add_tint(mode):
+    reinit(execution_mode=mode, no_atexit=True)
+    data = ShadowVariable(set([1, 2, 3]), False)
+    tainted_int = t_combine({0: 1, 1: 4})
+
+    # insert data at pos defined by tainted int
+    data.add(tainted_int)
+
+    t_assert(data.__len__() == 3)
+    assert get_killed() == gen_killed([1])
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_set_init_with_tint(mode):
+    reinit(execution_mode=mode, no_atexit=True)
+    tainted_int = t_combine({0: 1, 1: 4})
+    data = (1, 2, 3, tainted_int)
+    data = set(data)
+    data = ShadowVariable(data, False)
+
+    res = data.__len__() == 3
+    t_assert(res)
+    assert get_killed() == gen_killed([1])
 
 
 #################################################
 # tests for dict
-# ['__class__', '__class_getitem__', '__contains__', '__delattr__', '__delitem__', '__dir__',
-# '__doc__', '__eq__', '__format__', '__ge__', '__getattribute__', '__getitem__', '__gt__',
-# '__hash__', '__init__', '__init_subclass__', '__ior__', '__iter__', '__le__', '__len__',
-# '__lt__', '__ne__', '__new__', '__or__', '__reduce__', '__reduce_ex__', '__repr__',
-# '__reversed__', '__ror__', '__setattr__', '__setitem__', '__sizeof__', '__str__', '__subclasshook__',
-# 'clear', 'copy', 'fromkeys', 'get', 'items', 'keys', 'pop', 'popitem', 'setdefault', 'update', 'values']
 
-@pytest.mark.skip(reason="not implemented: tint not hashable")
+
 @pytest.mark.parametrize("mode", MODES)
 def test_dict_key_tainted(mode):
-    data = {}
-    tainted_int = t_combine({'0': 0, '1.1': 1})
+    reinit(execution_mode=mode, no_atexit=True)
 
-    # tainted int is not hashable
-    data[tainted_int] = 1
+    data = ShadowVariable({}, False)
+    tainted_int = t_combine({0: 0, 1: 1})
+    data[tainted_int] = tainted_int
 
-    # overwrite mainline value?
-    # data[0] = 2
+    for key in data:
+        t_assert(key == 0)
+        t_assert(data[key] == 0)
 
-    assert data[tainted_int] == 1
+    assert get_killed() == gen_killed([1])
+
+
+@pytest.mark.skip(reason="TODO: Handle exceptions in method calls.")
+@pytest.mark.parametrize("mode", MODES)
+def test_dict_init_tainted(mode):
+    reinit(execution_mode=mode, no_atexit=True)
+
+    tainted_int = t_combine({0: 0, 1: 1})
+    data = ShadowVariable({tainted_int: tainted_int}, False)
+
+    for key in data:
+        t_assert(key == 0)
+        t_assert(data[key] == 0)
+
+    assert get_killed() == gen_killed([1])
 
 
 
 #################################################
 # tests for class
+
 
 @pytest.mark.parametrize("mode", MODES)
 def test_class_init_with_taint(mode):
