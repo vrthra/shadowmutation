@@ -1,4 +1,7 @@
+from collections import defaultdict
+from typing import Dict, Optional, Union
 import os
+from random import randint
 import pytest
 import logging
 logger = logging.getLogger(__name__)
@@ -578,7 +581,7 @@ def test_bank_accounts_mut(mode):
 # real-world tests for split stream variants
 
 
-@pytest.mark.skipif(os.environ.get("TEST_SKIP_SPLIT_MODES"), reason="Skip split variant tests.")
+@pytest.mark.skipif(os.environ.get("TEST_SKIP_SPLIT_MODES") is not None, reason="Skip split variant tests.")
 @pytest.mark.parametrize("mode", SPLIT_STREAM_MODES)
 def test_approx_exp_split_stream(mode):
     from typing import Optional
@@ -775,19 +778,50 @@ def test_dict_key_tainted(mode):
     assert get_killed() == gen_killed([1])
 
 
-@pytest.mark.skip(reason="TODO: Handle exceptions in method calls.")
 @pytest.mark.parametrize("mode", MODES)
 def test_dict_init_tainted(mode):
     reinit(execution_mode=mode, no_atexit=True)
 
-    tainted_int = t_combine({0: 0, 1: 1})
-    data = ShadowVariable({tainted_int: tainted_int}, False)
+    def gen_val(disallowed: Optional[set[int]]=None) -> Union[int, ShadowVariable]:
+        is_sv = bool(randint(0, 1))
 
-    for key in data:
-        t_assert(key == 0)
-        t_assert(data[key] == 0)
+        if is_sv:
+            vals = {}
+            wanted_len = randint(1, 3)
+            while True:
+                if 0 not in vals:
+                    path = 0
+                else:
+                    path = randint(0, 10)
+                if path not in vals:
+                    val = randint(0, 100)
+                    if disallowed is not None:
+                        if val in disallowed:
+                            continue
+                        else:
+                            disallowed.add(val)
+                    vals[path] = val
+                if len(vals) >= wanted_len:
+                    break
+            return ShadowVariable(vals, from_mapping=True)
+        else:
+            while True:
+                val = randint(0, 100)
+                if disallowed is not None:
+                    if val in disallowed:
+                        continue
+                    else:
+                        disallowed.add(val)
+                return val
 
-    assert get_killed() == gen_killed([1])
+    for _ in range(100):
+        data = {}
+        disallowed: set[int] = set()
+        for _ in range(randint(1, 3)):
+            key = gen_val(disallowed)
+            val = gen_val()
+            data[key] = val
+        sv = ShadowVariable(data, from_mapping=False)
 
 
 

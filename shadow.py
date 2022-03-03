@@ -1531,7 +1531,86 @@ class ShadowVariable():
 
             shadow = combined
 
-        # TODO support dict
+        elif value_type == dict:
+            if len(obj) == 0:
+                # Empty dict
+                combined = {MAINLINE: {}}
+
+            else:
+                # This is a bit tricky as dict can have untainted and ShadowVariables as key and value.
+                # A few examples on the left the dict obj and on the right (->) the resulting ShadowVariable (sv):
+                # {0: 0}                                       -> sv(0: {0: 0})
+                # {0: sv(0: 1, 1: 2)}                          -> sv(0: {0: 1}, 1: {0: 2})
+                # {sv(0: 0, 1: 1): 0}                          -> sv(0: {0: 0}, 1: {1: 0})
+                # {sv(0: 0, 1: 1, 2: 2): sv(0: 0, 2: 2, 3: 3)} -> sv(0: {0: 0}, 1: {1: 0}, 2: {2: 2}, 3: {0: 3})
+                #
+                # There can also be multiple key value pairs.
+                # {0: 0, sv(0: 1, 2: 2): 2}                    -> sv(0: {0: 0, 1: 2}, 2: {0: 0, 2: 2})
+
+                # First expand all possible combinations for each key value pair.
+                all_expanded = []
+                for key, data in obj.items():
+                    # Get all paths for a key, value pair.
+                    expanded = {}
+                    if type(key) == ShadowVariable:
+                        key_shadow = key._shadow
+                        key_paths = set(key_shadow.keys())
+                    else:
+                        # If it is an untainted value, that is equivalent to the mainline path.
+                        key_paths = set([MAINLINE])
+
+                    if type(data) == ShadowVariable:
+                        data_shadow = data._shadow
+                        data_paths = set(data_shadow.keys())
+                    else:
+                        data_paths = set([MAINLINE])
+
+                    all_paths = key_paths | data_paths
+
+                    # Expand each combination.
+                    for path in all_paths:
+                        if type(key) == ShadowVariable:
+                            if path in key_shadow:
+                                path_key = key_shadow[path]
+                            else:
+                                path_key = key_shadow[MAINLINE]
+                        else:
+                            path_key = key
+
+                        if type(data) == ShadowVariable:
+                            if path in data_shadow:
+                                path_data = data_shadow[path]
+                            else:
+                                path_data = data_shadow[MAINLINE]
+                        else:
+                            path_data = data
+
+                        expanded[path] = (path_key, path_data)
+                    all_expanded.append(expanded)
+
+                # Get all paths that are needed in the resulting ShadowVariable.
+                combined = {}
+                for path in chain(*[paths.keys() for paths in all_expanded]):
+                    combined[path] = {}
+
+                # Build the resulting path dictionaries from the expanded combinations.
+                for expanded in all_expanded:
+                    for src_path, (key, val) in expanded.items():
+                        # If the combination is for mainline add it to all dictionaries, if they do not
+                        # have an alternative value.
+                        if src_path == MAINLINE:
+                            for trg_path, dict_values in combined.items():
+                                if trg_path == MAINLINE or (
+                                    trg_path != MAINLINE and trg_path not in expanded
+                                ):
+                                    assert key not in dict_values
+                                    dict_values[key] = val
+                        else:
+                            path_dict = combined[src_path]
+                            assert key not in path_dict
+                            path_dict[key] = val
+
+            shadow = combined
             
         else:
             shadow[MAINLINE] = obj
@@ -1683,7 +1762,6 @@ class ShadowVariable():
                 dict(),
                 0,
             )
-
 
         return res
 
