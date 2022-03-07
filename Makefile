@@ -29,7 +29,16 @@ test:
 	python3 -m pytest --log-cli-level=DEBUG --log-format="%(levelname)s %(process)d %(filename)s:%(lineno)s %(message)s"
 
 test-shadow:
-	TEST_SKIP_SPLIT_MODES=1 python3 -m pytest --log-cli-level=DEBUG --log-format="%(levelname)s %(process)d %(filename)s:%(lineno)s %(message)s"
+	TEST_SKIP_SPLIT_MODES=1 \
+		python3 -m pytest --log-cli-level=DEBUG --log-format="%(levelname)s %(process)d %(filename)s:%(lineno)s %(message)s"
+
+test-shadow-fork:
+	TEST_SKIP_SPLIT_MODES=1 TEST_SKIP_SHADOW_NO_FORK=1 \
+		python3 -m pytest --log-cli-level=DEBUG --log-format="%(levelname)s %(process)d %(filename)s:%(lineno)s %(message)s"
+
+test-shadow-no-fork:
+	TEST_SKIP_SPLIT_MODES=1 TEST_SKIP_SHADOW_FORK=1 \
+		python3 -m pytest --log-cli-level=DEBUG --log-format="%(levelname)s %(process)d %(filename)s:%(lineno)s %(message)s"
 
 
 tmp:

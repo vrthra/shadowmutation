@@ -7,10 +7,15 @@ import logging
 logger = logging.getLogger(__name__)
 
 from shadow import reinit, t_final_exception_test, t_wrap, t_combine, t_wait_for_forks, t_get_killed, t_cond, t_assert, \
-                   t_logical_path, t_seen_mutants, t_masked_mutants, ShadowVariable, t_class
+                   t_logical_path, t_seen_mutants, t_masked_mutants, ShadowVariable, t_class, t_active_mutants
 
-MODES = ['shadow_fork'] # , 'shadow_fork', 'shadow_cache', 'shadow_fork_cache']
-SPLIT_STREAM_MODES = ['split', 'modulo'] # , 'shadow_fork', 'shadow_cache', 'shadow_fork_cache']
+MODES = ['shadow', 'shadow_fork'] # , 'shadow_fork', 'shadow_cache', 'shadow_fork_cache']
+if os.environ.get("TEST_SKIP_SHADOW_NO_FORK") is not None:
+    MODES.remove('shadow')
+if os.environ.get("TEST_SKIP_SHADOW_FORK") is not None:
+    MODES.remove('shadow_fork')
+
+SPLIT_STREAM_MODES = ['split', 'modulo']
 
 
 def gen_killed(strong):
@@ -664,6 +669,7 @@ def test_tuple_eq_with_tint_elem(mode):
     assert get_killed() == gen_killed([1])
 
     reinit(execution_mode=mode, no_atexit=True)
+    res = fun()
     t_assert((1, 2, 3, 0) == res)
     assert get_killed() == gen_killed([1])
 

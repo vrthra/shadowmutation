@@ -577,3 +577,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# TODO wrap container types (list, set, dict, tuple)

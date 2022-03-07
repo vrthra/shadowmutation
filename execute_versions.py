@@ -109,9 +109,9 @@ def main():
         extract_data(get_res(Path(args.dir)/"split_stream.py",     'modulo'))
     print(modulo_killed, modulo_mode, modulo_subj_count, modulo_tool_count, modulo_runtime)
 
-    # shadow_killed, shadow_mode, shadow_subj_count, shadow_tool_count, shadow_line_count, shadow_runtime = \
-    #     extract_data(get_res(Path(args.dir)/"shadow_execution.py", 'shadow'))
-    # print(shadow_killed, shadow_mode, shadow_subj_count, shadow_tool_count, shadow_runtime)
+    shadow_killed, shadow_mode, shadow_subj_count, shadow_tool_count, shadow_line_count, shadow_runtime = \
+        extract_data(get_res(Path(args.dir)/"shadow_execution.py", 'shadow'))
+    print(shadow_killed, shadow_mode, shadow_subj_count, shadow_tool_count, shadow_runtime)
 
     # shadow_cache_killed, shadow_cache_mode, shadow_cache_subj_count, shadow_cache_tool_count, shadow_cache_line_count, shadow_cache_runtime = \
     #     extract_data(get_res(Path(args.dir)/"shadow_execution.py", 'shadow_cache'))
@@ -138,7 +138,7 @@ def main():
         trad_c = subject_line_ctr.get(ll, 0)
         ss_c = ss_line_count.get(ll, 0)
         modulo_c = modulo_line_count.get(ll, 0)
-        shadow_c = -1 # shadow_line_count.get(ll, 0)
+        shadow_c = shadow_line_count.get(ll, 0)
         shadow_cache_c = -1 # shadow_cache_line_count.get(ll, 0)
         sf_c = sf_line_count.get(ll, 0)
         sfc_c = -1 # sfc_line_count.get(ll, 0)
@@ -146,7 +146,7 @@ def main():
         trad_c_total += trad_c
         ss_c_total += ss_c
         modulo_c_total += modulo_c
-        # shadow_c_total += shadow_c
+        shadow_c_total += shadow_c
         # shadow_cache_c_total += shadow_cache_c
         sf_c_total += sf_c
         # sfc_c_total += sfc_c
@@ -156,14 +156,14 @@ def main():
 
     assert trad_killed == split_stream_killed
     assert trad_killed == modulo_killed
-    # assert trad_killed == shadow_killed
+    assert trad_killed == shadow_killed
     # assert trad_killed == shadow_cache_killed
     assert trad_killed == sf_killed
     # assert trad_killed == sfc_killed
 
     assert split_stream_mode == "SPLIT_STREAM"
     assert modulo_mode == "MODULO_EQV"
-    # assert shadow_mode == "SHADOW"
+    assert shadow_mode == "SHADOW"
     # assert shadow_cache_mode == "SHADOW_CACHE"
     assert sf_mode == "SHADOW_FORK"
     # assert sfc_mode == "SHADOW_FORK_CACHE"
