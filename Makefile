@@ -33,11 +33,19 @@ test-shadow:
 		python3 -m pytest --log-cli-level=DEBUG --log-format="%(levelname)s %(process)d %(filename)s:%(lineno)s %(message)s"
 
 test-shadow-fork:
-	TEST_SKIP_SPLIT_MODES=1 TEST_SKIP_SHADOW_NO_FORK=1 \
+	TEST_SKIP_SPLIT_MODES=1 TEST_SKIP_SHADOW_FORK_CACHE=1 TEST_SKIP_SHADOW_NO_FORK=1 TEST_SKIP_SHADOW_NO_FORK_CACHE=1 \
 		python3 -m pytest --log-cli-level=DEBUG --log-format="%(levelname)s %(process)d %(filename)s:%(lineno)s %(message)s"
 
+test-shadow-fork-cache:
+	TEST_SKIP_SPLIT_MODES=1 TEST_SKIP_SHADOW_FORK=1 TEST_SKIP_SHADOW_NO_FORK=1 TEST_SKIP_SHADOW_NO_FORK_CACHE=1 \
+		python3 -m pytest --tb=no --log-cli-level=DEBUG --log-format="%(levelname)s %(process)d %(filename)s:%(lineno)s %(message)s"
+
 test-shadow-no-fork:
-	TEST_SKIP_SPLIT_MODES=1 TEST_SKIP_SHADOW_FORK=1 \
+	TEST_SKIP_SPLIT_MODES=1 TEST_SKIP_SHADOW_FORK=1 TEST_SKIP_SHADOW_FORK_CACHE=1 TEST_SKIP_SHADOW_NO_FORK_CACHE=1 \
+		python3 -m pytest --log-cli-level=DEBUG --log-format="%(levelname)s %(process)d %(filename)s:%(lineno)s %(message)s"
+
+test-shadow-no-fork-cache:
+	TEST_SKIP_SPLIT_MODES=1 TEST_SKIP_SHADOW_FORK=1 TEST_SKIP_SHADOW_FORK_CACHE=1 TEST_SKIP_SHADOW_NO_FORK=1 \
 		python3 -m pytest --log-cli-level=DEBUG --log-format="%(levelname)s %(process)d %(filename)s:%(lineno)s %(message)s"
 
 

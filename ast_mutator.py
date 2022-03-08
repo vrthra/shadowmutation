@@ -457,7 +457,7 @@ def generate_traditional_mutation(path, res_dir, function_ignore_regex, mut) -> 
     mypy_filtered_dir = (res_dir/f"mypy_filtered")
     mypy_filtered_dir.mkdir(exist_ok=True)
 
-    mypy_result = api.run([str(res_path), "--strict"])
+    mypy_result = api.run([str(res_path), "--strict", "--follow-imports", "skip"])
     if mypy_result[2] != 0:
         shutil.move(res_path, mypy_filtered_dir/res_path.name)
         # print(mypy_result[0])
