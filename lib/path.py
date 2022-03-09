@@ -92,9 +92,13 @@ def set_selected_mutant(mut: Union[int, None]):
     _SELECTED_MUTANT = mut
 
 
-
 def get_strongly_killed() -> set[int]:
     return _STRONGLY_KILLED
+
+
+def merge_strongly_killed(killed: set[int]):
+    global _STRONGLY_KILLED
+    _STRONGLY_KILLED |= killed
 
 
 def get_seen_mutants() -> set[int]:

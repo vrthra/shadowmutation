@@ -2,6 +2,7 @@
 from multiprocessing import get_logger
 import pickle
 import os
+from shutil import rmtree
 import sys
 import json
 import tempfile
@@ -40,8 +41,49 @@ from lib.shadow_variable import (
 
 from typing import Union
 import logging
-logging.basicConfig(stream=sys.stdout, level=logging.DEBUG, format='%(process)d %(filename)s:%(lineno)s %(levelname)s %(message)s')
-logger = logging.getLogger(__name__)
+import logging.handlers
+log_format = '%(process)d %(filename)s:%(lineno)s %(levelname)s %(message)s'
+logging.basicConfig(stream=sys.stdout, level=logging.DEBUG, format=log_format)
+
+class PIDFileHandler(logging.StreamHandler):
+
+    def __init__(self, dir, mode='a', encoding=None, errors=None):
+        self.dir = dir
+        self.cur_pid = os.getpid()
+        self.mode = mode
+        self.encoding = encoding
+        self.errors = errors
+        super(PIDFileHandler, self).__init__(self._open())
+
+    def update_pid(self):
+        new_pid = os.getpid()
+        if self.cur_pid != new_pid:
+            self.cur_pid = new_pid
+            self.flush()
+            stream = self.stream 
+            self.setStream(self._open())
+            if hasattr(stream, "close"):
+                stream.close()
+
+    def _open(self):
+        """
+        Open the current base file with the (original) mode and encoding.
+        Return the resulting stream.
+        """
+        return open(Path(self.dir)/f'proc_{self.cur_pid}.log', self.mode,
+                         encoding=self.encoding, errors=self.errors)
+
+
+logger = logging.getLogger()
+
+LOGS_DIR = 'logs'
+rmtree(LOGS_DIR)
+os.mkdir(LOGS_DIR)
+
+fh = PIDFileHandler(LOGS_DIR)
+fh.setFormatter(logging.Formatter(log_format))
+fh.setLevel(logging.DEBUG)
+logger.addHandler(fh)
 
 
 class SetEncoder(json.JSONEncoder):

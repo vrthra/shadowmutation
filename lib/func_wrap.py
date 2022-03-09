@@ -22,7 +22,7 @@ def fork_wrap(f, *args, **kwargs):
 
     push_cache_stack()
     res = call_maybe_cache(f, *args, **kwargs)
-    combined_results = forking_context.wait_for_forks(fork_res=(res, args, kwargs))
+    mainline_result, fork_results = forking_context.wait_for_forks(fork_res=(res, args, kwargs))
     pop_cache_stack()
 
     # Filter args and kwargs for currently available, they will be updated with the fork values.
@@ -37,9 +37,9 @@ def fork_wrap(f, *args, **kwargs):
     set_forking_context(old_forking_context)
     set_masked_mutants(old_masked_mutants)
 
-    res = ShadowVariable(combined_results[0], from_mapping=True)
+    res = ShadowVariable(mainline_result, from_mapping=True)
 
-    for child_res in combined_results[1:]:
+    for child_res in fork_results:
         seen = child_res['seen']
         masked = child_res['masked']
         fork_res = child_res['fork_res']
