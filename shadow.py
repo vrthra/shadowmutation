@@ -292,7 +292,7 @@ def combine_split_stream(mutations):
             logger.debug(f"mainline return_val is exception: {return_val}")
             raise NotImplementedError()
         add_strongly_killed(get_logical_path())
-        forking_context.child_end()  # TODO this should never be reached?
+        forking_context.child_end()
 
     return return_val
 
@@ -342,7 +342,7 @@ def combine_modulo_eqv(mutations):
             assert get_ns_active_mutants() is not None
             for mut_id in get_ns_active_mutants():
                 add_strongly_killed(mut_id)
-            forking_context.child_end()  # TODO this should never be reached?
+            forking_context.child_end()
         else:
             msg = f"Mainline value has exception, this indicates a not green test suite: {log_res}"
             logger.error(msg)

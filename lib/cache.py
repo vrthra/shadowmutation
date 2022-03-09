@@ -264,3 +264,7 @@ def call_maybe_cache(f, *args, **kwargs):
         res = ShadowVariable(res, from_mapping=False)
         res._keep_active(get_seen_mutants(), get_masked_mutants())
         return res
+
+
+# TODO potentially there can be a sync point before the function starts to try and execute as many paths in that
+# function as once

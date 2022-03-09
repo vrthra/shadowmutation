@@ -1,6 +1,7 @@
 # Code for handling the different forking modes.
 
 import os
+import signal
 import sys
 import time
 from pathlib import Path
@@ -34,9 +35,8 @@ def act_on_logging_handlers(callback: Callable[..., Any]) -> None:
         else:
             c = c.parent
 
-
-_FORK_STYLE = "child_first"  # "parent_first" / "child_first"
-
+_CHILD_FIRST_FORKING = 0
+_PARENT_FIRST_FORKING = 1
 
 def get_child_results(result_file: Path) -> Union[list[dict[str, Any]], None]:
     if result_file.is_file():
@@ -78,7 +78,15 @@ def merge_child_results(combined_fork_res: list[dict[str, Any]], childrens_resul
 
 class Forker():
     def __init__(self) -> None:
-        self.started_paths = {}  # What paths have been forked off.
+        mode = get_execution_mode()
+        if mode.is_split_stream_variant:
+            self.fork_style = _CHILD_FIRST_FORKING
+        elif mode.is_shadow_variant:
+            self.fork_style = _PARENT_FIRST_FORKING
+        else:
+            raise NotImplementedError(f"Unhandled execution mode for forking {mode}")
+
+        self.started_paths: dict[int, int] = {}  # What paths have been forked off.
         self.parent_result_dir = None  # Where to write results.
         self.result_dir = None  # Where to get results of forked children.
         self._new_sync_dir()
@@ -94,9 +102,11 @@ class Forker():
         self.result_dir = self.sync_dir/'results'
         self.result_dir.mkdir()
 
-    def fork_child_first(self, path: int) -> bool:
+    def maybe_fork(self, path: int) -> bool:
+        # Only fork once, from then on follow that path.
+        if path in self.started_paths:
+            return False
 
-        # Try to fork
         forked_pid = os.fork()
 
         if forked_pid == -1:
@@ -105,14 +115,22 @@ class Forker():
         elif forked_pid != 0:
             # We are in parent, record the child pid and path.
             self.started_paths[path] = forked_pid
-            try:
-                os.waitpid(forked_pid, 0)
-            except ChildProcessError as e:
-                if e.errno != 10:
-                    logger.debug(f"{e}")
+
+            if self.fork_style == _CHILD_FIRST_FORKING:
+                # Wait for the child process to complete
+                try:
+                    os.waitpid(forked_pid, 0)
+                except ChildProcessError as e:
+                    if e.errno != 10:
+                        logger.debug(f"{e}")
 
             return False
         else:
+            if self.fork_style == _PARENT_FIRST_FORKING:
+                # Wait for parent to signal with SIGCONT
+                act_on_logging_handlers(lambda h: h.flush())
+                signal.raise_signal(signal.SIGSTOP)
+
             # Clear path as the child has not started any paths.
             self.started_paths.clear()
             self._new_sync_dir()
@@ -122,18 +140,6 @@ class Forker():
 
             reset_lines()
             return True
-
-    def maybe_fork(self, path: int) -> bool:
-        # Only fork once, from then on follow that path.
-        if path in self.started_paths:
-            return False
-
-        if _FORK_STYLE == "child_first":
-            return self.fork_child_first(path)
-        elif _FORK_STYLE == "parent_first":
-            raise NotImplementedError()
-        else:
-            raise ValueError(f"Unknown fork style: {_FORK_STYLE}")
 
     def _gather_results(self, fork_res: Any=None) -> dict[str, Any]:
         results = t_get_killed()
@@ -166,9 +172,13 @@ class Forker():
         while self.started_paths:
             path, child_pid = self.started_paths.popitem()
 
+            if self.fork_style == _PARENT_FIRST_FORKING:
+                _, res = os.waitpid(child_pid, os.WUNTRACED)
+                assert os.WIFSTOPPED(res)
+                os.kill(child_pid, signal.SIGCONT)
+
             while True:
                 time.sleep(.01)
-
                 try:
                     os.waitpid(child_pid, 0)
                 except ChildProcessError as e:
@@ -183,9 +193,6 @@ class Forker():
 
                     result_file.unlink()
                     break
-            
-            # if is_done:
-            #     break
 
         return combined_fork_res
 
