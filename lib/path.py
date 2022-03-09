@@ -143,7 +143,7 @@ def remove_ns_active_mutants(muts: set[int]):
     _NS_ACTIVE_MUTANTS -= muts
 
 
-def t_get_killed() -> Any:
+def t_get_killed() -> dict[str, Any]:
     res = {
         'strong': _STRONGLY_KILLED,
         'masked': _MASKED_MUTANTS,

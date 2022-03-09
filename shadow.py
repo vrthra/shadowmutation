@@ -55,7 +55,7 @@ class PIDFileHandler(logging.StreamHandler):
         self.errors = errors
         super(PIDFileHandler, self).__init__(self._open())
 
-    def update_pid(self):
+    def emit(self, record):
         new_pid = os.getpid()
         if self.cur_pid != new_pid:
             self.cur_pid = new_pid
@@ -64,6 +64,8 @@ class PIDFileHandler(logging.StreamHandler):
             self.setStream(self._open())
             if hasattr(stream, "close"):
                 stream.close()
+
+        logging.StreamHandler.emit(self, record)
 
     def _open(self):
         """
@@ -76,14 +78,17 @@ class PIDFileHandler(logging.StreamHandler):
 
 logger = logging.getLogger()
 
-LOGS_DIR = 'logs'
-rmtree(LOGS_DIR)
-os.mkdir(LOGS_DIR)
+ENABLE_FILE_LOGS = os.getenv('ENABLE_FILE_LOGS', '0') == '1'
 
-fh = PIDFileHandler(LOGS_DIR)
-fh.setFormatter(logging.Formatter(log_format))
-fh.setLevel(logging.DEBUG)
-logger.addHandler(fh)
+if ENABLE_FILE_LOGS:
+    LOGS_DIR = 'logs'
+    rmtree(LOGS_DIR)
+    os.mkdir(LOGS_DIR)
+
+    fh = PIDFileHandler(LOGS_DIR)
+    fh.setFormatter(logging.Formatter(log_format))
+    fh.setLevel(logging.DEBUG)
+    logger.addHandler(fh)
 
 
 class SetEncoder(json.JSONEncoder):
@@ -287,7 +292,7 @@ def combine_split_stream(mutations):
             logger.debug(f"mainline return_val is exception: {return_val}")
             raise NotImplementedError()
         add_strongly_killed(get_logical_path())
-        forking_context.child_end()
+        forking_context.child_end()  # TODO this should never be reached?
 
     return return_val
 
@@ -337,7 +342,7 @@ def combine_modulo_eqv(mutations):
             assert get_ns_active_mutants() is not None
             for mut_id in get_ns_active_mutants():
                 add_strongly_killed(mut_id)
-            forking_context.child_end()
+            forking_context.child_end()  # TODO this should never be reached?
         else:
             msg = f"Mainline value has exception, this indicates a not green test suite: {log_res}"
             logger.error(msg)
