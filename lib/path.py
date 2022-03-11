@@ -3,13 +3,15 @@
 import os
 from typing import Any, Union
 
-from .constants import MAINLINE, ShadowExceptionStop
+from .utils import MAINLINE, ShadowExceptionStop
 from .mode import get_execution_mode
 
 _LOGICAL_PATH = MAINLINE
 _SELECTED_MUTANT: Union[int, None] = None
 _STRONGLY_KILLED: set[int] = set()
 _SEEN_MUTANTS: set[int] = set()
+_FUNCTION_SEEN_MUTANTS: set[int] = set()
+_FUNCTION_MASKED_MUTANTS: set[int] = set()
 _MASKED_MUTANTS: set[int] = set()
 _NS_ACTIVE_MUTANTS: Union[set[int], None] = None # NS = Non Shadow
 
@@ -19,6 +21,8 @@ def reinit_path(logical_path: Union[int, None]) -> None:
     global _STRONGLY_KILLED
     global _NS_ACTIVE_MUTANTS
     global _SEEN_MUTANTS
+    global _FUNCTION_SEEN_MUTANTS
+    global _FUNCTION_MASKED_MUTANTS
     global _MASKED_MUTANTS
 
     if logical_path is not None:
@@ -33,6 +37,8 @@ def reinit_path(logical_path: Union[int, None]) -> None:
 
     if mode.is_shadow_variant():
         _SEEN_MUTANTS = set()
+        _FUNCTION_SEEN_MUTANTS = set()
+        _FUNCTION_MASKED_MUTANTS = set()
         _MASKED_MUTANTS = set()
     elif mode.is_split_stream_variant():
         _NS_ACTIVE_MUTANTS = None
@@ -105,9 +111,27 @@ def get_seen_mutants() -> set[int]:
     return _SEEN_MUTANTS
 
 
+def get_function_seen_masked() -> set[int]:
+    return _FUNCTION_SEEN_MUTANTS, _FUNCTION_MASKED_MUTANTS
+
+
+def add_function_seen_mutants(muts: set[int]):
+    global _FUNCTION_SEEN_MUTANTS
+    _FUNCTION_SEEN_MUTANTS |= muts
+
+
+def reset_function_seen_masked() -> set[int]:
+    global _FUNCTION_SEEN_MUTANTS
+    global _FUNCTION_MASKED_MUTANTS
+    _FUNCTION_SEEN_MUTANTS.clear()
+    _FUNCTION_MASKED_MUTANTS.clear()
+
+
 def add_seen_mutants(muts: set[int]):
     global _SEEN_MUTANTS
+    global _FUNCTION_SEEN_MUTANTS
     _SEEN_MUTANTS |= muts
+    _FUNCTION_SEEN_MUTANTS |= muts
 
 
 def get_masked_mutants() -> set[int]:
@@ -121,7 +145,14 @@ def set_masked_mutants(masked: set[int]) -> None:
 
 def add_masked_mutants(masked: set[int]):
     global _MASKED_MUTANTS
+    global _FUNCTION_MASKED_MUTANTS
     _MASKED_MUTANTS |= masked
+    _FUNCTION_MASKED_MUTANTS |= masked
+
+
+def remove_masked_mutants(masked: set[int]):
+    global _MASKED_MUTANTS
+    _MASKED_MUTANTS -= masked
 
 
 def get_ns_active_mutants() -> set[int]:

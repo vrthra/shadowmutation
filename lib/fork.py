@@ -9,7 +9,7 @@ from tempfile import mkdtemp
 from typing import Any, Callable, Optional, TypeVar, Tuple, Union
 import pickle
 from json.decoder import JSONDecodeError
-from lib.constants import MAINLINE
+from lib.utils import MAINLINE
 
 from lib.path import get_logical_path, get_masked_mutants, get_seen_mutants, merge_strongly_killed, set_logical_path, t_get_killed
 from .mode import get_execution_mode
@@ -78,10 +78,11 @@ def merge_child_results(combined_fork_res: list[dict[str, Any]], childrens_resul
 
 class Forker():
     def __init__(self) -> None:
+        # TODO split shadow_fork into child and parent first
         mode = get_execution_mode()
-        if mode.is_split_stream_variant:
+        if mode.is_split_stream_variant():
             self.fork_style = _CHILD_FIRST_FORKING
-        elif mode.is_shadow_variant:
+        elif mode.is_shadow_variant():
             self.fork_style = _PARENT_FIRST_FORKING
         else:
             raise NotImplementedError(f"Unhandled execution mode for forking {mode}")
@@ -92,8 +93,15 @@ class Forker():
         self._new_sync_dir()
 
     def __del__(self) -> None:
-        (self.sync_dir/'results').rmdir()
-        self.sync_dir.rmdir()
+        if self.result_dir is not None:
+            if self.result_dir.is_dir():
+                self.result_dir.rmdir()
+
+        try:
+            if self.sync_dir.is_dir():
+                self.sync_dir.rmdir()
+        except AttributeError:
+            pass
 
     def _new_sync_dir(self) -> None:
         self.sync_dir = Path(mkdtemp())
@@ -101,6 +109,9 @@ class Forker():
         self.parent_result_dir = self.result_dir
         self.result_dir = self.sync_dir/'results'
         self.result_dir.mkdir()
+
+    def is_parent(self) -> bool:
+        return self.parent_result_dir is None
 
     def maybe_fork(self, path: int) -> bool:
         # Only fork once, from then on follow that path.
@@ -126,6 +137,7 @@ class Forker():
 
             return False
         else:
+            # We are in child
             if self.fork_style == _PARENT_FIRST_FORKING:
                 # Wait for parent to signal with SIGCONT
                 act_on_logging_handlers(lambda h: h.flush())

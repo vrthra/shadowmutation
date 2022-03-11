@@ -37,10 +37,9 @@ def get_res(path, mode, should_not_print=False, timeout=None):
             res = json.load(f)
             res['exit_code'] = run_res.returncode
             res['runtime'] = end - start
-            # print(res)
             return res
     except FileNotFoundError:
-        return {'strong': ['error'], 'execution_mode': mode, 'exit_code': run_res.returncode}
+        return {'strong': ['error'], 'execution_mode': mode, 'exit_code': run_res.returncode, 'out': run_res.stdout.decode()}
 
 
 def extract_data(data):
@@ -65,6 +64,10 @@ def extract_data(data):
         #seconds = tt%60
         #return f"{minutes:.0f}:{seconds:.2f}"
         return f"{tt:.2f}"
+
+    if data.get('strong') == 'error':
+        print(data)
+        raise ValueError(data)
 
     return get_sorted(data, 'strong'), get_mode(data), subj_count(data), tool_count(data), line_counts(data), runtime(data)
 
@@ -113,17 +116,17 @@ def main():
         extract_data(get_res(Path(args.dir)/"shadow_execution.py", 'shadow'))
     print(shadow_killed, shadow_mode, shadow_subj_count, shadow_tool_count, shadow_runtime)
 
-    # shadow_cache_killed, shadow_cache_mode, shadow_cache_subj_count, shadow_cache_tool_count, shadow_cache_line_count, shadow_cache_runtime = \
-    #     extract_data(get_res(Path(args.dir)/"shadow_execution.py", 'shadow_cache'))
-    # print(shadow_cache_killed, shadow_cache_mode, shadow_cache_subj_count, shadow_cache_tool_count, shadow_cache_runtime)
+    shadow_cache_killed, shadow_cache_mode, shadow_cache_subj_count, shadow_cache_tool_count, shadow_cache_line_count, shadow_cache_runtime = \
+        extract_data(get_res(Path(args.dir)/"shadow_execution.py", 'shadow_cache'))
+    print(shadow_cache_killed, shadow_cache_mode, shadow_cache_subj_count, shadow_cache_tool_count, shadow_cache_runtime)
 
     sf_killed, sf_mode, sf_subj_count, sf_tool_count, sf_line_count, sf_runtime = \
         extract_data(get_res(Path(args.dir)/"shadow_execution.py", 'shadow_fork'))
     print(sf_killed, sf_mode, sf_subj_count, sf_tool_count, sf_runtime)
 
-    # sfc_killed, sfc_mode, sfc_subj_count, sfc_tool_count, sfc_line_count, sfc_runtime = \
-    #     extract_data(get_res(Path(args.dir)/"shadow_execution.py", 'shadow_fork_cache'))
-    # print(sfc_killed, sfc_mode, sfc_subj_count, sfc_tool_count, sfc_runtime)
+    sfc_killed, sfc_mode, sfc_subj_count, sfc_tool_count, sfc_line_count, sfc_runtime = \
+        extract_data(get_res(Path(args.dir)/"shadow_execution.py", 'shadow_fork_cache'))
+    print(sfc_killed, sfc_mode, sfc_subj_count, sfc_tool_count, sfc_runtime)
 
 
     all_lines = subject_line_ctr.keys() | ss_line_count.keys() | modulo_line_count.keys() | sf_line_count.keys()
@@ -139,17 +142,17 @@ def main():
         ss_c = ss_line_count.get(ll, 0)
         modulo_c = modulo_line_count.get(ll, 0)
         shadow_c = shadow_line_count.get(ll, 0)
-        shadow_cache_c = -1 # shadow_cache_line_count.get(ll, 0)
+        shadow_cache_c = shadow_cache_line_count.get(ll, 0)
         sf_c = sf_line_count.get(ll, 0)
-        sfc_c = -1 # sfc_line_count.get(ll, 0)
+        sfc_c = sfc_line_count.get(ll, 0)
 
         trad_c_total += trad_c
         ss_c_total += ss_c
         modulo_c_total += modulo_c
         shadow_c_total += shadow_c
-        # shadow_cache_c_total += shadow_cache_c
+        shadow_cache_c_total += shadow_cache_c
         sf_c_total += sf_c
-        # sfc_c_total += sfc_c
+        sfc_c_total += sfc_c
 
         print(f"{ll:4}: {trad_c:10} {ss_c:10} {modulo_c:10} {shadow_c:10} {shadow_cache_c:10} {sf_c:10} {sfc_c:10}")
 

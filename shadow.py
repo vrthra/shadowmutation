@@ -20,7 +20,7 @@ from tempfile import mkdtemp, mkstemp
 from copy import deepcopy
 from functools import wraps
 
-from lib.constants import MAINLINE
+from lib.utils import MAINLINE
 from lib.mode import reinit_execution_mode, get_execution_mode
 from lib.path import (
     reinit_path,

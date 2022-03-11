@@ -3,10 +3,10 @@
 from copy import deepcopy
 from functools import wraps
 from itertools import chain
-from lib.constants import MAINLINE, ShadowException, ShadowExceptionStop
+from lib.utils import MAINLINE, ShadowException, ShadowExceptionStop
 from lib.fork import get_forking_context, new_forking_context, set_forking_context
 from lib.path import active_mutants, get_logical_path, get_masked_mutants, get_seen_mutants, get_strongly_killed, set_logical_path, set_masked_mutants
-from lib.shadow_variable import ShadowVariable, set_new_no_init, unset_new_no_init
+from lib.shadow_variable import ShadowVariable, copy_args, set_new_no_init, unset_new_no_init
 from lib.cache import push_cache_stack, pop_cache_stack, call_maybe_cache
 
 import logging
@@ -14,7 +14,6 @@ logger = logging.getLogger(__name__)
 
 def fork_wrap(f, *args, **kwargs):
 
-    # logger.debug(f"CALL {f.__name__}({args} {kwargs}) seen: {get_seen_mutants()} masked: {get_masked_mutants()}")
     old_forking_context = get_forking_context()
     old_masked_mutants = deepcopy(get_masked_mutants())
 
@@ -59,16 +58,7 @@ def fork_wrap(f, *args, **kwargs):
     return res._maybe_untaint()
 
 
-def copy_args(args, kwargs):
-    set_new_no_init()
-    copied = deepcopy((args, kwargs))
-    unset_new_no_init()
-    return copied
-
-
 def no_fork_wrap(f, *args, **kwargs):
-    # TODO copy args and update them with changes
-    # logger.debug(f"CALL {f.__name__}({args} {kwargs})")
     initial_args, initial_kwargs = copy_args(args, kwargs)
     before_logical_path = get_logical_path()
     before_active = active_mutants()
@@ -90,7 +80,6 @@ def no_fork_wrap(f, *args, **kwargs):
             remaining_paths.remove(before_logical_path)
         else:
             set_logical_path(remaining_paths.pop())
-        # logger.debug(f"cur path: {get_logical_path()} remaining: {remaining_paths}")
         set_masked_mutants((deepcopy(before_masked) | done_paths) - set((get_logical_path(), )))
 
         if get_logical_path() == before_logical_path:
@@ -109,7 +98,6 @@ def no_fork_wrap(f, *args, **kwargs):
             continue 
         after_active = active_mutants()
         after_masked = deepcopy(get_masked_mutants())
-        # logger.debug('wrapped: %s(%s %s) -> %s (%s)', f.__name__, args, kwargs, res, type(res))
         new_active = after_active - before_active
         new_masked = after_masked - before_masked
 
@@ -117,6 +105,9 @@ def no_fork_wrap(f, *args, **kwargs):
         shadow = res._shadow
 
         # Update results for the current execution.
+        if get_logical_path() != MAINLINE and before_logical_path == get_logical_path() and MAINLINE in shadow:
+            tainted_return[MAINLINE] = shadow[MAINLINE]
+
         for active_mut in active_mutants() | set([get_logical_path()]):
             assert active_mut not in tainted_return
             if active_mut in shadow:

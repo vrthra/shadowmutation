@@ -16,6 +16,17 @@
             },
         },
         {
+            "name": "shadow fork cache",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "env": {
+                "PYTHONPATH": ".",
+                "EXECUTION_MODE": "shadow_fork_cache"
+            },
+        },
+        {
             "name": "split",
             "type": "python",
             "request": "launch",

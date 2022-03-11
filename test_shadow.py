@@ -838,18 +838,18 @@ def test_dict_init_tainted(mode):
 #################################################
 # tests for class
 
+@t_class
+class InitWithTaintCls():
+    def __init__(self, val):
+        self.val = val
+
 
 @pytest.mark.parametrize("mode", MODES)
 def test_class_init_with_taint(mode):
 
-    @t_class
-    class Test():
-        def __init__(self, val):
-            self.val = val
-
     @t_wrap
     def func(tainted_int):
-        t = Test(tainted_int)
+        t = InitWithTaintCls(tainted_int)
         return t
     
     reinit(execution_mode=mode, no_atexit=True)
@@ -858,16 +858,18 @@ def test_class_init_with_taint(mode):
     assert get_killed() == gen_killed([1])
 
 
+@t_class
+class UpdateWithTaintCls():
+    def __init__(self):
+        self.val = 0
+
+
+
 @pytest.mark.parametrize("mode", MODES)
 def test_class_attr_update_with_taint(mode):
-    @t_class
-    class Test():
-        def __init__(self):
-            self.val = 0
-
     @t_wrap
     def func(tainted_int):
-        t = Test()
+        t = UpdateWithTaintCls()
         t.val += tainted_int
         return t
     

@@ -8,8 +8,8 @@ import traceback
 import types
 from typing import Any, Callable, Dict, Iterable, Tuple, TypeVar, Union
 
-from lib.path import active_mutants, add_masked_mutants, add_seen_mutants, add_strongly_killed, get_logical_path, get_masked_mutants, get_seen_mutants, get_selected_mutant, set_selected_mutant
-from lib.constants import MAINLINE, PRIMITIVE_TYPES, ShadowExceptionStop
+from lib.path import active_mutants, add_function_seen_mutants, add_masked_mutants, add_seen_mutants, add_strongly_killed, get_logical_path, get_masked_mutants, get_seen_mutants, get_selected_mutant, set_selected_mutant
+from lib.utils import MAINLINE, PRIMITIVE_TYPES, ShadowExceptionStop
 from lib.mode import get_execution_mode
 
 
@@ -489,7 +489,7 @@ class ShadowVariable():
         log_res = self._get_logical_res(get_logical_path()).__getattribute__(name)
         
         if callable(log_res):
-            # TODO returning a lambda here only works if the callable is only called
+            # OOS returning a lambda here only works if the callable is only called
             # it does not work if the callable is compared to some other function or other edge cases
             # maybe return a dedicated object instead that raises errors for edge cases / implements them correctly
             return lambda *args, **kwargs: self._callable_wrap(name, *args, **kwargs)
@@ -718,10 +718,12 @@ class ShadowVariable():
             unset_new_no_init()
         return var
 
-    def _prune_muts(self, muts: dict[int, Any]) -> ShadowVariable:
+    def _copy_and_prune_muts(self, muts: dict[int, Any]) -> ShadowVariable:
         "Copies shadow, does not modify in place."
         assert MAINLINE not in muts
+        set_new_no_init()
         shadow = deepcopy(self._shadow)
+        unset_new_no_init()
         for mut in muts:
             shadow.pop(mut, None)
         res = ShadowVariable(shadow, from_mapping=True)
@@ -863,11 +865,14 @@ def t_class(orig_class):
     return orig_class
 
 
-def untaint_args(*args: tuple[Union[ShadowVariable, Any], ...], **kwargs: dict[str, Union[ShadowVariable, Any]]) -> dict[int, ]:
+def untaint_args(*args: tuple[Union[ShadowVariable, Any], ...], **kwargs: dict[str, Union[ShadowVariable, Any]]) -> dict[int, Any]:
+    """Get a mapping of each path to args and kwargs for each path available from the ShadowVariable in the arguments."""
     all_muts = set([MAINLINE])
     for arg in args + tuple(kwargs.values()):
         if type(arg) == ShadowVariable:
             all_muts |= arg._get_paths()
+
+    mainline_incomplete = False
 
     untainted_args = {}
     for mut in all_muts:
@@ -878,8 +883,11 @@ def untaint_args(*args: tuple[Union[ShadowVariable, Any], ...], **kwargs: dict[s
                 arg_shadow = arg._shadow
                 if mut in arg_shadow:
                     mut_args.append(arg_shadow[mut])
-                else:
+                elif MAINLINE in arg_shadow:
                     mut_args.append(arg_shadow[MAINLINE])
+                else:
+                    mainline_incomplete = True
+                    continue
             else:
                 mut_args.append(arg)
 
@@ -889,12 +897,21 @@ def untaint_args(*args: tuple[Union[ShadowVariable, Any], ...], **kwargs: dict[s
                 arg_shadow = arg._shadow
                 if mut in arg_shadow:
                     mut_kwargs[name] = arg_shadow[mut]
-                else:
+                elif MAINLINE in arg_shadow:
                     mut_kwargs[name] = arg_shadow[MAINLINE]
+                else:
+                    mainline_incomplete = True
+                    continue
             else:
                 mut_kwargs[name] = arg
 
         untainted_args[mut] = (tuple(mut_args), dict(mut_kwargs))
+
+    # Could not get a value for mainline for every argument. (Some sv do not have a mainline value)
+    if mainline_incomplete:
+        # This should only happen for non-mainline paths.
+        assert get_logical_path() != MAINLINE
+        del untainted_args[MAINLINE]
 
     return untainted_args
 
@@ -929,8 +946,8 @@ def get_active_shadow(val: Any, seen: set[int], masked: set[int]) -> Union[dict[
 def t_combine_shadow(mutations: dict[int, Any]) -> Any:
 
     if get_logical_path() == MAINLINE:
-        new_paths = set(mutations.keys()) - get_masked_mutants() - set([MAINLINE])
-        add_seen_mutants(new_paths)
+        add_seen_mutants(set(mutations.keys()) - get_masked_mutants() - set([MAINLINE]))
+        add_function_seen_mutants(set(mutations.keys()))
 
     evaluated_mutations = {}
     for mut, res in mutations.items():
@@ -969,7 +986,6 @@ def t_combine_shadow(mutations: dict[int, Any]) -> Any:
         evaluated_mutations[mut] = res
 
     if get_execution_mode().is_shadow_variant():
-        # TODO maybe_mark_mutation(evaluated_mutations)
         res = ShadowVariable(evaluated_mutations, from_mapping=True)
         res._keep_active(get_seen_mutants(), get_masked_mutants())
     else:
@@ -1010,3 +1026,10 @@ def set_new_no_init() -> None:
 def unset_new_no_init() -> None:
     global _NEW_NO_INIT
     _NEW_NO_INIT = False
+
+
+def copy_args(args, kwargs):
+    set_new_no_init()
+    copied = deepcopy((args, kwargs))
+    unset_new_no_init()
+    return copied
