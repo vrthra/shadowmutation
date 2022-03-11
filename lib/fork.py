@@ -78,11 +78,10 @@ def merge_child_results(combined_fork_res: list[dict[str, Any]], childrens_resul
 
 class Forker():
     def __init__(self) -> None:
-        # TODO split shadow_fork into child and parent first
         mode = get_execution_mode()
-        if mode.is_split_stream_variant():
+        if mode.is_split_stream_variant() or mode.is_shadow_fork_child():
             self.fork_style = _CHILD_FIRST_FORKING
-        elif mode.is_shadow_variant():
+        elif mode.is_shadow_fork_parent() or mode.is_shadow_fork_cache():
             self.fork_style = _PARENT_FIRST_FORKING
         else:
             raise NotImplementedError(f"Unhandled execution mode for forking {mode}")

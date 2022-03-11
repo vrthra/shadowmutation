@@ -66,6 +66,15 @@ class ExecutionMode(Enum):
         else:
             return False
 
+    def is_shadow_fork_child(self) -> bool:
+        return self == ExecutionMode.SHADOW_FORK_CHILD
+
+    def is_shadow_fork_parent(self) -> bool:
+        return self == ExecutionMode.SHADOW_FORK_PARENT
+
+    def is_shadow_fork_cache(self) -> bool:
+        return self == ExecutionMode.SHADOW_FORK_CACHE
+
     def is_split_stream_variant(self) -> bool:
         if self in [ExecutionMode.SPLIT_STREAM, ExecutionMode.MODULO_EQV]:
             return True
