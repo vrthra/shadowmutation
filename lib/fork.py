@@ -188,22 +188,19 @@ class Forker():
                 assert os.WIFSTOPPED(res)
                 os.kill(child_pid, signal.SIGCONT)
 
-            while True:
-                time.sleep(.01)
-                try:
-                    os.waitpid(child_pid, 0)
-                except ChildProcessError as e:
-                    if e.errno != 10:
-                        logger.debug(f"{e}")
+            try:
+                os.waitpid(child_pid, 0)
+            except ChildProcessError as e:
+                if e.errno != 10:
+                    logger.debug(f"{e}")
 
-                result_file = self.result_dir/str(path)
-                child_results = get_child_results(result_file)
-                if child_results is not None:
+            result_file = self.result_dir/str(path)
+            child_results = get_child_results(result_file)
+            assert child_results is not None
 
-                    merge_child_results(combined_fork_res, child_results)
+            merge_child_results(combined_fork_res, child_results)
 
-                    result_file.unlink()
-                    break
+            result_file.unlink()
 
         return combined_fork_res
 
