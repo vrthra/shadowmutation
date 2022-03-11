@@ -9,17 +9,20 @@ logger = logging.getLogger(__name__)
 from shadow import reinit, t_final_exception_test, t_wrap, t_combine, t_wait_for_forks, t_get_killed, t_cond, t_assert, \
                    t_logical_path, t_seen_mutants, t_masked_mutants, ShadowVariable, t_class, t_active_mutants
 
-MODES = ['shadow', 'shadow_cache', 'shadow_fork', 'shadow_fork_cache'] # , 'shadow_fork', 'shadow_cache', 'shadow_fork_cache']
-if os.environ.get("TEST_SKIP_SHADOW_NO_FORK") is not None:
-    MODES.remove('shadow')
-if os.environ.get("TEST_SKIP_SHADOW_NO_FORK_CACHE") is not None:
-    MODES.remove('shadow_cache')
-if os.environ.get("TEST_SKIP_SHADOW_FORK") is not None:
-    MODES.remove('shadow_fork')
-if os.environ.get("TEST_SKIP_SHADOW_FORK_CACHE") is not None:
-    MODES.remove('shadow_fork_cache')
-
+MODES = ['shadow', 'shadow_cache', 'shadow_fork_child', 'shadow_fork_parent', 'shadow_fork_cache'] # , 'shadow_fork', 'shadow_cache', 'shadow_fork_cache']
 SPLIT_STREAM_MODES = ['split', 'modulo']
+
+if os.environ.get("TEST_SKIP_MODES") is not None:
+    modes_to_skip = os.environ.get("TEST_SKIP_MODES").split(',')
+    logger.info(f"Skipping modes: {modes_to_skip}")
+    for mts in modes_to_skip:
+        if mts in MODES:
+            MODES.remove(mts)
+        elif mts in SPLIT_STREAM_MODES:
+            SPLIT_STREAM_MODES.remove(mts)
+        else:
+            logger.warning(f"Unknown mode can't skip: {mts}")
+
 
 
 def gen_killed(strong):

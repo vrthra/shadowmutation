@@ -13,9 +13,10 @@ class ExecutionMode(Enum):
     SPLIT_STREAM = 1 # split stream execution
     MODULO_EQV = 2 # split stream + modulo equivalence pruning execution
     SHADOW = 3 # shadow types and no forking
-    SHADOW_FORK = 4 # shadow and forking
-    SHADOW_CACHE = 5 # shadow types and no forking with caching
-    SHADOW_FORK_CACHE = 6 # shadow and forking with caching
+    SHADOW_FORK_CHILD = 4 # shadow and forking, child first
+    SHADOW_FORK_PARENT = 5 # shadow and forking, parent first
+    SHADOW_CACHE = 6 # shadow types and no forking with caching
+    SHADOW_FORK_CACHE = 7 # shadow and forking with caching (always parent first)
 
     @staticmethod
     def get_mode(mode: Union[str, None]) -> ExecutionMode:
@@ -27,8 +28,10 @@ class ExecutionMode(Enum):
             return ExecutionMode.MODULO_EQV
         elif mode == 'shadow':
             return ExecutionMode.SHADOW
-        elif mode == 'shadow_fork':
-            return ExecutionMode.SHADOW_FORK
+        elif mode == 'shadow_fork_child':
+            return ExecutionMode.SHADOW_FORK_CHILD
+        elif mode == 'shadow_fork_parent':
+            return ExecutionMode.SHADOW_FORK_PARENT
         elif mode == 'shadow_cache':
             return ExecutionMode.SHADOW_CACHE
         elif mode == 'shadow_fork_cache':
@@ -43,7 +46,8 @@ class ExecutionMode(Enum):
         if self in [
             ExecutionMode.SPLIT_STREAM,
             ExecutionMode.MODULO_EQV,
-            ExecutionMode.SHADOW_FORK,
+            ExecutionMode.SHADOW_FORK_CHILD,
+            ExecutionMode.SHADOW_FORK_PARENT,
             ExecutionMode.SHADOW_FORK_CACHE,
         ]:
             return True
@@ -51,7 +55,13 @@ class ExecutionMode(Enum):
             return False
 
     def is_shadow_variant(self) -> bool:
-        if self in [ExecutionMode.SHADOW, ExecutionMode.SHADOW_CACHE, ExecutionMode.SHADOW_FORK, ExecutionMode.SHADOW_FORK_CACHE]:
+        if self in [
+            ExecutionMode.SHADOW,
+            ExecutionMode.SHADOW_CACHE,
+            ExecutionMode.SHADOW_FORK_CHILD,
+            ExecutionMode.SHADOW_FORK_PARENT,
+            ExecutionMode.SHADOW_FORK_CACHE
+        ]:
             return True
         else:
             return False

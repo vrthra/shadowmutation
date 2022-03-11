@@ -120,22 +120,27 @@ def main():
         extract_data(get_res(Path(args.dir)/"shadow_execution.py", 'shadow_cache'))
     print(shadow_cache_killed, shadow_cache_mode, shadow_cache_subj_count, shadow_cache_tool_count, shadow_cache_runtime)
 
-    sf_killed, sf_mode, sf_subj_count, sf_tool_count, sf_line_count, sf_runtime = \
-        extract_data(get_res(Path(args.dir)/"shadow_execution.py", 'shadow_fork'))
-    print(sf_killed, sf_mode, sf_subj_count, sf_tool_count, sf_runtime)
+    sf_c_killed, sf_c_mode, sf_c_subj_count, sf_c_tool_count, sf_c_line_count, sf_c_runtime = \
+        extract_data(get_res(Path(args.dir)/"shadow_execution.py", 'shadow_fork_child'))
+    print(sf_c_killed, sf_c_mode, sf_c_subj_count, sf_c_tool_count, sf_c_runtime)
+
+    sf_p_killed, sf_p_mode, sf_p_subj_count, sf_p_tool_count, sf_p_line_count, sf_p_runtime = \
+        extract_data(get_res(Path(args.dir)/"shadow_execution.py", 'shadow_fork_parent'))
+    print(sf_p_killed, sf_p_mode, sf_p_subj_count, sf_p_tool_count, sf_p_runtime)
 
     sfc_killed, sfc_mode, sfc_subj_count, sfc_tool_count, sfc_line_count, sfc_runtime = \
         extract_data(get_res(Path(args.dir)/"shadow_execution.py", 'shadow_fork_cache'))
     print(sfc_killed, sfc_mode, sfc_subj_count, sfc_tool_count, sfc_runtime)
 
 
-    all_lines = subject_line_ctr.keys() | ss_line_count.keys() | modulo_line_count.keys() | sf_line_count.keys()
+    all_lines = subject_line_ctr.keys() | ss_line_count.keys() | modulo_line_count.keys() | sf_c_line_count.keys()
     trad_c_total = 0
     ss_c_total = 0
     modulo_c_total = 0
     shadow_c_total = 0
     shadow_cache_c_total = 0
     sf_c_total = 0
+    sf_p_total = 0
     sfc_c_total = 0
     for ll in sorted(all_lines):
         trad_c = subject_line_ctr.get(ll, 0)
@@ -143,7 +148,8 @@ def main():
         modulo_c = modulo_line_count.get(ll, 0)
         shadow_c = shadow_line_count.get(ll, 0)
         shadow_cache_c = shadow_cache_line_count.get(ll, 0)
-        sf_c = sf_line_count.get(ll, 0)
+        sf_c = sf_c_line_count.get(ll, 0)
+        sf_p = sf_p_line_count.get(ll, 0)
         sfc_c = sfc_line_count.get(ll, 0)
 
         trad_c_total += trad_c
@@ -152,33 +158,40 @@ def main():
         shadow_c_total += shadow_c
         shadow_cache_c_total += shadow_cache_c
         sf_c_total += sf_c
+        sf_p_total += sf_p
         sfc_c_total += sfc_c
 
-        print(f"{ll:4}: {trad_c:10} {ss_c:10} {modulo_c:10} {shadow_c:10} {shadow_cache_c:10} {sf_c:10} {sfc_c:10}")
+        print(f"{ll:4}: {trad_c:10} {ss_c:10} {modulo_c:10} {shadow_c:10} {shadow_cache_c:10} {sf_c:10} {sf_p:10} {sfc_c:10}")
 
 
     assert trad_killed == split_stream_killed
     assert trad_killed == modulo_killed
     assert trad_killed == shadow_killed
-    # assert trad_killed == shadow_cache_killed
-    assert trad_killed == sf_killed
-    # assert trad_killed == sfc_killed
+    assert trad_killed == shadow_cache_killed
+    assert trad_killed == sf_c_killed
+    assert trad_killed == sf_p_killed
+    assert trad_killed == sfc_killed
 
     assert split_stream_mode == "SPLIT_STREAM"
     assert modulo_mode == "MODULO_EQV"
     assert shadow_mode == "SHADOW"
-    # assert shadow_cache_mode == "SHADOW_CACHE"
-    assert sf_mode == "SHADOW_FORK"
-    # assert sfc_mode == "SHADOW_FORK_CACHE"
+    assert shadow_cache_mode == "SHADOW_CACHE"
+    assert sf_c_mode == "SHADOW_FORK_CHILD"
+    assert sf_p_mode == "SHADOW_FORK_PARENT"
+    assert sfc_mode == "SHADOW_FORK_CACHE"
 
     assert trad_c_total == subject_ctr
     assert ss_c_total == split_stream_subj_count
     assert modulo_c_total == modulo_subj_count
-    # assert shadow_c_total == shadow_subj_count
-    # assert shadow_cache_c_total == shadow_cache_subj_count
-    assert sf_c_total == sf_subj_count, f"{sf_c_total}, {sf_subj_count}"
-    # assert sfc_c_total == sfc_subj_count
+    assert shadow_c_total == shadow_subj_count
+    assert shadow_cache_c_total == shadow_cache_subj_count
+    assert sf_c_total == sf_c_subj_count, f"{sf_c_total}, {sf_c_subj_count}"
+    assert sf_p_total == sf_p_subj_count, f"{sf_p_total}, {sf_p_subj_count}"
+    assert sfc_c_total == sfc_subj_count
 
 
 if __name__ == "__main__":
     main()
+
+
+# TODO write results to a file
