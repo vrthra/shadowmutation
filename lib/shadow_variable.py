@@ -779,9 +779,10 @@ class ShadowVariable():
             other_shadow = get_selected(other._shadow)
             # notice that both self and other has taints.
             # the result we need contains taints from both.
-            common_shadows = {k for k in self_shadow if k in other_shadow}
-            only_self_shadows = self_shadow.keys() - common_shadows - set([MAINLINE])
-            only_other_shadows = other_shadow.keys() - common_shadows - set([MAINLINE])
+            masked_shadows = get_masked_mutants() - set([MAINLINE])
+            common_shadows = {k for k in self_shadow if k in other_shadow} - masked_shadows
+            only_self_shadows = self_shadow.keys() - common_shadows - set([MAINLINE]) - masked_shadows
+            only_other_shadows = other_shadow.keys() - common_shadows - set([MAINLINE]) - masked_shadows
 
             if only_self_shadows:
                 other_main = other_shadow[MAINLINE]

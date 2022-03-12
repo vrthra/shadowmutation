@@ -34,7 +34,7 @@ def fork_wrap(f, *args, **kwargs):
             arg._keep_active(get_seen_mutants(), get_masked_mutants())
 
     set_forking_context(old_forking_context)
-    set_masked_mutants(old_masked_mutants)
+    set_masked_mutants(old_masked_mutants | get_strongly_killed())
 
     res = ShadowVariable(mainline_result, from_mapping=True)
 
@@ -55,6 +55,7 @@ def fork_wrap(f, *args, **kwargs):
 
 
     # If only mainline in return value untaint it
+    res._keep_active(get_seen_mutants(), get_masked_mutants())
     return res._maybe_untaint()
 
 
@@ -80,7 +81,8 @@ def no_fork_wrap(f, *args, **kwargs):
             remaining_paths.remove(before_logical_path)
         else:
             set_logical_path(remaining_paths.pop())
-        set_masked_mutants((deepcopy(before_masked) | done_paths) - set((get_logical_path(), )))
+            assert get_logical_path() not in get_strongly_killed()
+        set_masked_mutants((before_masked | done_paths | get_strongly_killed()) - set((get_logical_path(),)))
 
         if get_logical_path() == before_logical_path:
             copied_args, copied_kwargs = args, kwargs
@@ -139,12 +141,12 @@ def no_fork_wrap(f, *args, **kwargs):
         done_paths |= new_active
         done_paths.add(get_logical_path())
         remaining_paths |= new_masked
-        remaining_paths -= done_paths
+        remaining_paths -= (done_paths | get_strongly_killed())
 
     pop_cache_stack()
 
     set_logical_path(before_logical_path)
-    set_masked_mutants(before_masked)
+    set_masked_mutants(before_masked | get_strongly_killed())
 
     res = ShadowVariable(tainted_return, from_mapping=True)
     return res._maybe_untaint()

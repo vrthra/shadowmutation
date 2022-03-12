@@ -1,10 +1,15 @@
 # Manage the current logical path and killed paths / mutations.
 
+import json
 import os
-from typing import Any, Union
+from tempfile import TemporaryFile
+from typing import Any, Optional, Union
 
 from .utils import MAINLINE, ShadowExceptionStop
 from .mode import get_execution_mode
+
+import logging
+logger = logging.getLogger(__name__)
 
 _LOGICAL_PATH = MAINLINE
 _SELECTED_MUTANT: Union[int, None] = None
@@ -14,6 +19,7 @@ _FUNCTION_SEEN_MUTANTS: set[int] = set()
 _FUNCTION_MASKED_MUTANTS: set[int] = set()
 _MASKED_MUTANTS: set[int] = set()
 _NS_ACTIVE_MUTANTS: Union[set[int], None] = None # NS = Non Shadow
+_SHARED_RESULTS_PATH: Optional[Any] = None
 
 def reinit_path(logical_path: Union[int, None]) -> None:
     global _LOGICAL_PATH
@@ -24,6 +30,7 @@ def reinit_path(logical_path: Union[int, None]) -> None:
     global _FUNCTION_SEEN_MUTANTS
     global _FUNCTION_MASKED_MUTANTS
     global _MASKED_MUTANTS
+    global _SHARED_RESULTS_PATH
 
     if logical_path is not None:
         _LOGICAL_PATH = logical_path
@@ -48,6 +55,10 @@ def reinit_path(logical_path: Union[int, None]) -> None:
     else:
         raise ValueError(f"Unknown execution mode: {mode}")
 
+    if mode.is_shadow_fork_variant():
+        _SHARED_RESULTS_PATH = TemporaryFile(mode='w+t')
+        save_shared()
+
 
 def get_logical_path() -> int:
     return _LOGICAL_PATH
@@ -67,10 +78,10 @@ def active_mutants() -> set[int]:
 def add_strongly_killed(mut: int) -> None:
     global _MASKED_MUTANTS
 
-    if mut in _STRONGLY_KILLED:
-        # TODO reduce multiply killed mutants
-        # logger.debug(f"redundant strongly killed: {mut}")
-        pass
+    if get_execution_mode().is_shadow_variant():
+        if mut in _STRONGLY_KILLED:
+            logger.warning(f"redundant strongly killed: {mut}")
+            assert False
 
     _MASKED_MUTANTS.add(mut)
     _STRONGLY_KILLED.add(mut)
@@ -185,3 +196,36 @@ def t_get_killed() -> dict[str, Any]:
     elif mode.is_split_stream_variant():
         res['active'] = _NS_ACTIVE_MUTANTS
     return res
+
+
+def load_shared() -> None:
+    if get_execution_mode().is_shadow_fork_variant():
+        global _STRONGLY_KILLED
+        _SHARED_RESULTS_PATH.seek(0)
+        try:
+            data = set(json.load(_SHARED_RESULTS_PATH))
+        except Exception as e:
+            logger.warning(f"{e}")
+            raise e
+
+        add_seen_mutants(data)
+        for mut in data - _STRONGLY_KILLED:
+            try:
+                add_strongly_killed(mut)
+            except ShadowExceptionStop as e:
+                logger.debug(f"load shared ended run")
+                raise e
+
+
+
+def save_shared() -> None:
+    if get_execution_mode().is_shadow_fork_variant():
+        _SHARED_RESULTS_PATH.truncate(0)
+        _SHARED_RESULTS_PATH.seek(0)
+        try:
+            json.dump(list(_STRONGLY_KILLED), _SHARED_RESULTS_PATH)
+        except Exception as e:
+            logger.warning(f"{e}")
+            raise e
+
+        _SHARED_RESULTS_PATH.flush()

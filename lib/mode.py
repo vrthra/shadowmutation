@@ -55,16 +55,20 @@ class ExecutionMode(Enum):
             return False
 
     def is_shadow_variant(self) -> bool:
-        if self in [
+        return self in [
             ExecutionMode.SHADOW,
             ExecutionMode.SHADOW_CACHE,
             ExecutionMode.SHADOW_FORK_CHILD,
             ExecutionMode.SHADOW_FORK_PARENT,
             ExecutionMode.SHADOW_FORK_CACHE
-        ]:
-            return True
-        else:
-            return False
+        ]
+
+    def is_shadow_fork_variant(self) -> bool:
+        return self in [
+            ExecutionMode.SHADOW_FORK_CHILD,
+            ExecutionMode.SHADOW_FORK_PARENT,
+            ExecutionMode.SHADOW_FORK_CACHE
+        ]
 
     def is_shadow_fork_child(self) -> bool:
         return self == ExecutionMode.SHADOW_FORK_CHILD

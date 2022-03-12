@@ -11,7 +11,7 @@ import pickle
 from json.decoder import JSONDecodeError
 from lib.utils import MAINLINE
 
-from lib.path import get_logical_path, get_masked_mutants, get_seen_mutants, merge_strongly_killed, set_logical_path, t_get_killed
+from lib.path import get_logical_path, get_masked_mutants, get_seen_mutants, load_shared, merge_strongly_killed, save_shared, set_logical_path, t_get_killed
 from .mode import get_execution_mode
 from .line_counter import add_subject_counter, add_subject_counter_dict, add_tool_counter, get_counter_results, reset_lines
 from .shadow_variable import ShadowVariable, set_new_no_init, unset_new_no_init, get_active_shadow
@@ -134,6 +134,9 @@ class Forker():
                     if e.errno != 10:
                         logger.debug(f"{e}")
 
+                # After child processes are done, load shared results.
+                load_shared()
+
             return False
         else:
             # We are in child
@@ -141,6 +144,9 @@ class Forker():
                 # Wait for parent to signal with SIGCONT
                 act_on_logging_handlers(lambda h: h.flush())
                 signal.raise_signal(signal.SIGSTOP)
+
+                # After parent processes are done, load shared results.
+                load_shared()
 
             # Clear path as the child has not started any paths.
             self.started_paths.clear()
@@ -220,6 +226,9 @@ class Forker():
         with open(res_path, 'wb') as f:
             pickle.dump([results, *child_results], f)
 
+        # Save shared results as child is done.
+        save_shared()
+
         # OOS: exit the child immediately, this might cause problems for programs actually using multiprocessing
         # but this is a prototype
         act_on_logging_handlers(lambda h: h.flush())
@@ -242,6 +251,9 @@ class Forker():
 
         # wait for all child processes to end
         combined_fork_res = self.wait_for_children_results()
+
+        # Save shared results as parent is done.
+        save_shared()
 
         return mainline_res, combined_fork_res
 
