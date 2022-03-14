@@ -66,14 +66,12 @@ def get_child_results(result_file: Path) -> Union[list[dict[str, Any]], None]:
     return None
 
 
-def merge_child_results(combined_fork_res: list[dict[str, Any]], childrens_results: list[dict[str, Any]]) -> None:
+def publish_child_results(childrens_results: list[dict[str, Any]]) -> None:
     for child_results in childrens_results:
         merge_strongly_killed(child_results['strong'])
         add_subject_counter(child_results['subject_count'])
         add_tool_counter(child_results['tool_count'])
         add_subject_counter_dict(child_results['subject_count_lines'])
-
-        combined_fork_res.append(child_results)
 
 
 class Forker():
@@ -186,8 +184,8 @@ class Forker():
             results['fork_res'] = (return_val, results_args, results_kwargs)
         return results
 
-    def wait_for_children_results(self) -> list[dict[str, Any]]:
-        combined_fork_res: list[dict[str, Any]] = []
+    def wait_for_child_results(self) -> list[dict[str, Any]]:
+        all_child_results: list[dict[str, Any]] = []
         failed = False
         while self.started_paths:
             path, child_pid = self.started_paths.popitem()
@@ -203,20 +201,21 @@ class Forker():
                 if e.errno != 10:
                     logger.debug(f"{e}")
 
+            assert self.result_dir is not None
+            assert path is not None
             result_file = self.result_dir/str(path)
             child_results = get_child_results(result_file)
             if child_results is None:
                 failed = True
                 continue
 
-            merge_child_results(combined_fork_res, child_results)
-
             result_file.unlink()
+            all_child_results.extend(child_results)
 
         if failed:
             raise ValueError("Could not get all child results.")
 
-        return combined_fork_res
+        return all_child_results
 
     def child_end(self, fork_res: Any=None) -> Any:
         assert self.associated_path is not None
@@ -224,7 +223,7 @@ class Forker():
         assert self.parent_result_dir is not None
 
         if self.started_paths:
-            child_results = self.wait_for_children_results()
+            child_results = self.wait_for_child_results()
         else:
             child_results = []
 
@@ -259,12 +258,14 @@ class Forker():
         mainline_res = get_active_shadow(return_val, get_seen_mutants(), get_masked_mutants())
 
         # wait for all child processes to end
-        combined_fork_res = self.wait_for_children_results()
+        child_results = self.wait_for_child_results()
+
+        publish_child_results(child_results)
 
         # Save shared results as parent is done.
         save_shared()
 
-        return mainline_res, combined_fork_res
+        return mainline_res, child_results
 
     
 _FORKING_CONTEXT: Union[Forker, None] = None
