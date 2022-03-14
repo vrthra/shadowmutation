@@ -1,24 +1,35 @@
 import os
 import argparse
 import json
+import tempfile
 import time
 from copy import deepcopy
-from subprocess import run, PIPE, STDOUT
+from subprocess import CompletedProcess, run, PIPE, STDOUT
 from collections import defaultdict
 from pathlib import Path
+from typing import Any, Optional
 
 
-def run_it(path, mode=None, logical_path=None, result_file=None, should_not_print=False, timeout=None):
+def run_it(path: Path, trace: bool, mode: Optional[str]=None, logical_path: Optional[str]=None, result_file: Optional[Path]=None, should_not_print: bool=False, timeout: Optional[int]=None) -> CompletedProcess[bytes]:
     # print(path)
     env = deepcopy(os.environ)
+
     if logical_path is not None:
         env['LOGICAL_PATH'] = str(logical_path)
+
     if result_file is not None:
         env['RESULT_FILE'] = str(result_file)
+
     if mode is not None:
         env['EXECUTION_MODE'] = mode
+
+    if trace:
     env['TRACE'] = "1"
+    else:
+        pass
+
     env['GATHER_ATEXIT'] = '1'
+
     res = run(['python3', path], stdout=PIPE, stderr=STDOUT, env=env, timeout=timeout)
     if res.returncode != 0 and not should_not_print:
         print(f"{res.args} => {res.returncode}")
@@ -26,15 +37,16 @@ def run_it(path, mode=None, logical_path=None, result_file=None, should_not_prin
     return res
 
 
-def get_res(path, mode, should_not_print=False, timeout=None):
-    res_path = Path('res.json')
-    res_path.unlink(missing_ok=True)
+def get_res_inner(path: Path, mode: str, trace: bool, should_not_print: bool=False, timeout: Optional[int]=None) -> dict[str, Any]:
+    with tempfile.NamedTemporaryFile(mode='rt') as f:
+        res_path = Path(f.name)
     start = time.time()
-    run_res = run_it(path, mode=mode, result_file=res_path, should_not_print=should_not_print, timeout=timeout)
+        run_res = run_it(path, trace, mode=mode, result_file=res_path, should_not_print=should_not_print, timeout=timeout)
     end = time.time()
+
     try:
         with open(res_path, 'rt') as f:
-            res = json.load(f)
+                res: dict[str, Any] = json.load(f)
             res['exit_code'] = run_res.returncode
             res['runtime'] = end - start
             return res
@@ -42,7 +54,24 @@ def get_res(path, mode, should_not_print=False, timeout=None):
         return {'strong': ['error'], 'execution_mode': mode, 'exit_code': run_res.returncode, 'out': run_res.stdout.decode()}
 
 
-def extract_data(data):
+def get_res(path: Path, mode: str, should_not_print: bool=False, timeout: Optional[int]=None) -> dict[str, Any]:
+    trace_res = get_res_inner(path, mode, True, should_not_print, timeout)
+    time_res = get_res_inner(path, mode, False, should_not_print, timeout)
+
+    combined_res = {}
+    for kk in ['execution_mode', 'strong', 'exit_code']:
+        assert trace_res[kk] == time_res[kk]
+        combined_res[kk] = trace_res[kk]
+
+    combined_res['tool_count'] = trace_res['tool_count']
+    combined_res['subject_count'] = trace_res['subject_count']
+    combined_res['subject_count_lines'] = trace_res['subject_count_lines']
+
+    combined_res['runtime'] = time_res['runtime']
+    return combined_res
+
+
+def extract_data(data: dict[str, Any]) -> Any:
     def get_sorted(data, key):
         return sorted(data[key])
 
@@ -77,7 +106,7 @@ def main():
     parser.add_argument('dir', help="Path to ast_mutator result dir.")
     args = parser.parse_args()
 
-    run_it(Path(args.dir)/'original.py')
+    run_it(Path(args.dir)/'original.py', False)
 
 
     mut_ids = []
