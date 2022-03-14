@@ -1,5 +1,5 @@
 from collections import defaultdict
-from typing import Dict, Optional, Union
+from typing import Dict, List, Optional, Union
 import os
 from random import randint
 import pytest
@@ -7,7 +7,8 @@ import logging
 logger = logging.getLogger(__name__)
 
 from shadow import reinit, t_final_exception_test, t_wrap, t_combine, t_wait_for_forks, t_get_killed, t_cond, t_assert, \
-                   t_logical_path, t_seen_mutants, t_masked_mutants, ShadowVariable, t_class, t_active_mutants
+                   t_logical_path, t_seen_mutants, t_masked_mutants, ShadowVariable, t_class, t_active_mutants, t_sv
+from lib.fork import get_forking_context
 
 MODES = ['shadow', 'shadow_cache', 'shadow_fork_child', 'shadow_fork_parent', 'shadow_fork_cache'] # , 'shadow_fork', 'shadow_cache', 'shadow_fork_cache']
 SPLIT_STREAM_MODES = ['split', 'modulo']
@@ -587,6 +588,98 @@ def test_bank_accounts_mut(mode):
     fun()
     assert get_killed() == gen_killed([2, 3, 4, 6, 7, 8, 9])
 
+
+@pytest.mark.parametrize("mode", MODES)
+def test_fact(mode) ->None:
+    inc = t_sv([4, 2, 4, 2, 4, 6, 2, 6])
+
+    @t_wrap
+    def div(val: int, divisor: int) ->bool:
+        modded = t_combine({(0): lambda : val % divisor, (1): lambda : val + divisor, (2): lambda : val - divisor, (3): lambda : val * divisor, (4): lambda : val / divisor, (5): lambda : val << divisor, (6): lambda : val >> divisor, (7): lambda : val | divisor, (8): lambda : val ^ divisor, (9): lambda : val & divisor, (10): lambda : val // divisor})
+        return t_combine({(0): lambda : modded != 0, (11): lambda : modded == 0, (13): lambda : modded <= 0, (14): lambda : modded > 0, (15): lambda : modded >= 0})
+
+    @t_wrap
+    def factorize(n: int) ->List[int]:
+        factors = t_sv([])
+        while True:
+            is_div = div(n, 2)
+            if t_cond(is_div):
+                break
+            factors.append(2)
+            n = t_combine({(0): lambda : n // 2, (22): lambda : n >> 2})
+        while True:
+            is_div = div(n, 3)
+            if t_cond(is_div):
+                break
+            factors.append(3)
+            n = t_combine({(0): lambda : n // 3, (26): lambda : n + 3, (27): lambda : n - 3, (28): lambda : n * 3, (30): lambda : n % 3, (31): lambda : n << 3, (32): lambda : n >> 3, (33): lambda : n | 3, (34): lambda : n ^ 3, (35): lambda : n & 3})
+        while True:
+            is_div = div(n, 5)
+            if t_cond(is_div):
+                break
+            factors.append(5)
+            n = t_combine({(0): lambda : n // 5, (36): lambda : n + 5, (37): lambda : n - 5, (38): lambda : n * 5, (40): lambda : n % 5, (41): lambda : n << 5, (42): lambda : n >> 5, (43): lambda : n | 5, (44): lambda : n ^ 5, (45): lambda : n & 5})
+        k = 7
+        i = 0
+        while True:
+            k_squared = t_combine({(0): lambda : k * k, (46): lambda : k + k, (50): lambda : k << k, (52): lambda : k | k, (54): lambda : k & k})
+            if t_cond(t_combine({(0): lambda : k_squared > n, (57): lambda : k_squared != n, (58): lambda : k_squared < n, (59): lambda : k_squared <= n, (60): lambda : k_squared >= n})):
+                break
+            is_div = div(n, k)
+            n_mod_k = t_combine({(0): lambda : n % k, (61): lambda : n + k, (62): lambda : n - k, (63): lambda : n * k, (64): lambda : n / k, (65): lambda : n << k, (66): lambda : n >> k, (67): lambda : n | k, (68): lambda : n ^ k, (69): lambda : n & k, (70): lambda : n // k})
+            if t_cond(t_combine({(0): lambda : n_mod_k == 0, (71): lambda : n_mod_k != 0, (72): lambda : n_mod_k < 0, (73): lambda : n_mod_k <= 0, (74): lambda : n_mod_k > 0, (75): lambda : n_mod_k >= 0})):
+                factors.append(k)
+                n = t_combine({(0): lambda : n // k, (76): lambda : n + k, (77): lambda : n - k, (78): lambda : n * k, (80): lambda : n % k, (81): lambda : n << k, (82): lambda : n >> k, (83): lambda : n | k, (84): lambda : n ^ k, (85): lambda : n & k})
+            else:
+                k = t_combine({(0): lambda : k + inc[i], (87): lambda : k * inc[i], (90): lambda : k << inc[i], (91): lambda : k >> inc[i], (94): lambda : k & inc[i]})
+                if t_cond(t_combine({(0): lambda : i < 7, (96): lambda : i == 7, (97): lambda : i != 7, (98): lambda : i <= 7, (99): lambda : i > 7, (100): lambda : i >= 7})):
+                    i = t_combine({(0): lambda : i + 1, (101): lambda : i - 1, (102): lambda : i * 1, (104): lambda : i % 1, (105): lambda : i << 1, (106): lambda : i >> 1, (107): lambda : i | 1, (108): lambda : i ^ 1, (109): lambda : i & 1, (110): lambda : i // 1})
+                else:
+                    i = 1
+        if t_cond(t_combine({(0): lambda : n > 1, (111): lambda : n == 1, (112): lambda : n != 1, (113): lambda : n < 1, (114): lambda : n <= 1, (115): lambda : n >= 1})):
+            factors.append(n)
+        return factors
+
+    @t_wrap
+    def do_it():
+        res = factorize(3242)
+        expected = t_sv([2, 1621])
+        t_assert(res == expected)
+
+    reinit(execution_mode=mode, no_atexit=True)
+    do_it()
+    assert get_killed() == gen_killed([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 22, 66, 71, 74, 75, 91, 94, 98, 111, 113, 114])
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_caesar(mode) ->None:
+    @t_wrap
+    def caesar(string: List[int], key: int, decode: bool=False) ->List[int]:
+        if t_cond(decode):
+            key = t_combine({(0): lambda : 26 - key, (1): lambda : 26 + key, (2): lambda : 26 * key, (4): lambda : 26 % key, (5): lambda : 26 << key, (6): lambda : 26 >> key, (7): lambda : 26 | key, (8): lambda : 26 ^ key, (9): lambda : 26 & key, (10): lambda : 26 // key})
+        res = t_sv([])
+        ii = 0
+        for c in string:
+            ii += 1
+            if t_cond(t_combine({(0): lambda : c <= 64, (11): lambda : c == 64, (12): lambda : c != 64, (13): lambda : c < 64, (14): lambda : c > 64, (15): lambda : c >= 64})):
+                pass
+            elif t_cond(t_combine({(0): lambda : c >= 90, (16): lambda : c == 90, (17): lambda : c != 90, (18): lambda : c < 90, (19): lambda : c <= 90, (20): lambda : c > 90})):
+                pass
+            else:
+                c = t_combine({(0): lambda : c - 65, (21): lambda : c + 65, (22): lambda : c * 65, (24): lambda : c % 65, (25): lambda : c << 65, (26): lambda : c >> 65, (27): lambda : c | 65, (28): lambda : c ^ 65, (29): lambda : c & 65, (30): lambda : c // 65})
+                c = t_combine({(0): lambda : c + key, (31): lambda : c - key, (32): lambda : c * key, (34): lambda : c % key, (35): lambda : c << key, (36): lambda : c >> key, (37): lambda : c | key, (38): lambda : c ^ key, (39): lambda : c & key, (40): lambda : c // key})
+                c = t_combine({(0): lambda : c % 26, (41): lambda : c + 26, (42): lambda : c - 26, (43): lambda : c * 26, (45): lambda : c << 26, (46): lambda : c >> 26, (47): lambda : c | 26, (48): lambda : c ^ 26, (49): lambda : c & 26, (50): lambda : c // 26})
+                c = t_combine({(0): lambda : c + 65, (51): lambda : c - 65, (52): lambda : c * 65, (54): lambda : c % 65, (55): lambda : c << 65, (56): lambda : c >> 65, (57): lambda : c | 65, (58): lambda : c ^ 65, (59): lambda : c & 65, (60): lambda : c // 65})
+            res.append(c)
+        return res
+
+    reinit(execution_mode=mode, no_atexit=True)
+    msg = 'The quick brown fox jumped over the lazy dogs'
+    input = t_sv([ord(c) for c in msg])
+    enc = caesar(input, 11)
+    dec = caesar(enc, 11, decode=True)
+    t_assert(input == dec)
+    assert get_killed() == gen_killed([1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 14, 15, 16, 18, 19, 22, 25, 26, 27, 28, 29, 30, 32, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 45, 46, 47, 48, 49, 50, 51, 52, 54, 55, 56, 57, 58, 59, 60])
 
 
 #################################################

@@ -86,6 +86,7 @@ class Forker():
         else:
             raise NotImplementedError(f"Unhandled execution mode for forking {mode}")
 
+        self.associated_path = None
         self.started_paths: dict[int, int] = {}  # What paths have been forked off.
         self.parent_result_dir = None  # Where to write results.
         self.result_dir = None  # Where to get results of forked children.
@@ -153,6 +154,7 @@ class Forker():
             self._new_sync_dir()
 
             # Update which path child is supposed to follow
+            self.associated_path: Optional[int] = path
             set_logical_path(path)
 
             reset_lines()
@@ -186,6 +188,7 @@ class Forker():
 
     def wait_for_children_results(self) -> list[dict[str, Any]]:
         combined_fork_res: list[dict[str, Any]] = []
+        failed = False
         while self.started_paths:
             path, child_pid = self.started_paths.popitem()
 
@@ -202,17 +205,22 @@ class Forker():
 
             result_file = self.result_dir/str(path)
             child_results = get_child_results(result_file)
-            assert child_results is not None
+            if child_results is None:
+                failed = True
+                continue
 
             merge_child_results(combined_fork_res, child_results)
 
             result_file.unlink()
 
+        if failed:
+            raise ValueError("Could not get all child results.")
+
         return combined_fork_res
 
     def child_end(self, fork_res: Any=None) -> Any:
-        path = get_logical_path()
-        assert path != MAINLINE
+        assert self.associated_path is not None
+        assert self.associated_path != MAINLINE
         assert self.parent_result_dir is not None
 
         if self.started_paths:
@@ -222,9 +230,10 @@ class Forker():
 
         results = self._gather_results(fork_res)
 
-        res_path = self.parent_result_dir/str(path)
+        res_path = self.parent_result_dir/str(self.associated_path)
         with open(res_path, 'wb') as f:
             pickle.dump([results, *child_results], f)
+            f.flush()
 
         # Save shared results as child is done.
         save_shared()

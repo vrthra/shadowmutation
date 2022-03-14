@@ -285,9 +285,9 @@ def call_maybe_cache(f, *args, **kwargs):
         except ShadowException as e:
             raise e
         except Exception as e:
-            message = traceback.format_exc()
-            logger.error(f"Error: {message}")
-            raise NotImplementedError(f"Exceptions in wrapped functions are not supported: {e}")
+            message = f"Error: {e} {traceback.format_exc()}"
+            logger.error(message)
+            raise NotImplementedError(f"Exceptions in wrapped functions are not supported: {message}")
 
         res = ShadowVariable(res, from_mapping=False)
         res._keep_active(get_seen_mutants(), get_masked_mutants())

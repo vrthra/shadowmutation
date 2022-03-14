@@ -5,8 +5,8 @@ inc = [4, 2, 4, 2, 4, 6, 2, 6]
 
 
 def div(val: int, divisor: int) -> bool:
-    print(val, divisor, val % divisor)
-    return (val % divisor) != 0
+    modded = val % divisor
+    return modded != 0
 
 
 def factorize(n: int) -> List[int]:
@@ -32,10 +32,12 @@ def factorize(n: int) -> List[int]:
     k = 7
     i = 0
     while True:
-        if k * k > n:
+        k_squared = k * k
+        if k_squared > n:
             break
         is_div = div(n, k)
-        if (n % k) == 0:
+        n_mod_k = n % k
+        if n_mod_k == 0:
             factors.append(k)
             n = n // k
         else:
@@ -51,9 +53,8 @@ def factorize(n: int) -> List[int]:
 
 def test_fact() -> None:
     res = factorize(3242)
-    print(res)
     expected = [2, 1621]
-    assert sum(res) == sum(expected)
+    assert res == expected
 
 
 test_fact()

@@ -21,16 +21,14 @@ def entropy(hist: List[int], l: int) -> Optional[float]:
         c = v / l
         c_log = ln(c)
         normalized = -c * c_log
-        # print(c, normalized)
         res = res + normalized
     return res
  
  
 def test_entropy() -> None:
     source = [1, 2, 2, 3, 3, 3, 4, 4, 4, 4]
-    res = entropy(source, len(source))
+    res = entropy(source, source.__len__())
     if res is not None:
-        # print(res)
         expected = 3.421568195457525
         diff = abs(res - expected)
         rounded_diff = round(diff, 8)

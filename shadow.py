@@ -36,7 +36,7 @@ from lib.line_counter import get_counter_results, reinit_trace, disable_line_cou
 from lib.func_wrap import t_wrap
 from lib.cache import maybe_clean_cache, reinit_cache
 from lib.shadow_variable import (
-    ShadowVariable, set_new_no_init, t_class, shadow_assert, t_combine_shadow, unset_new_no_init, untaint_args
+    ShadowVariable, set_new_no_init, t_class, shadow_assert, t_combine_shadow, unset_new_no_init, untaint_args, t_cond
 )
 
 from typing import Union
@@ -157,52 +157,6 @@ def t_final_exception_test() -> None:
     for mut in active_mutants():
         add_strongly_killed(mut)
     t_wait_for_forks()
-
-
-def t_cond(cond: Any) -> bool:
-
-    if type(cond) == ShadowVariable:
-        diverging_mutants = []
-        companion_mutants = []
-
-        # get the logical path result, this is used to decide which mutations follow the logical path and which do not
-        logical_result = cond._get_logical_res(get_logical_path())
-        assert type(logical_result) == bool, f"{cond}"
-
-        for path, val in cond._all_path_results(get_seen_mutants(), get_masked_mutants()):
-            if path == MAINLINE or path == get_logical_path():
-                continue
-            assert type(val) == bool, f"{cond}"
-            if val == logical_result:
-                companion_mutants.append(path)
-            else:
-                diverging_mutants.append(path)
-
-        forking_context = get_forking_context() 
-        if forking_context is not None:
-            original_path = get_logical_path()
-            # Fork if enabled
-            if diverging_mutants:
-                # logger.debug(f"path: {get_logical_path()} masked: {get_masked_mutants()} seen: {get_seen_mutants()} companion: {companion_mutants} diverging: {diverging_mutants}")
-                # select the path to follow, just pick first
-                path = diverging_mutants[0]
-                if forking_context.maybe_fork(path):
-                    # we are now in the forked child
-                    add_masked_mutants(set(companion_mutants + [original_path]))
-                    return t_cond(cond)
-                else:
-                    add_masked_mutants(set(diverging_mutants))
-        else:
-            # Follow the logical path, if that is not the same as mainline mark other mutations as inactive
-            if diverging_mutants:
-                add_masked_mutants(set(diverging_mutants))
-
-        return logical_result
-
-    else:
-        return cond
-        # logger.debug("vanilla")
-        # raise NotImplementedError()
 
 
 def split_assert(cmp_result):
@@ -386,6 +340,10 @@ def t_combine(mutations: dict[int, Any]) -> Any:
         return t_combine_shadow(mutations)
     elif mode.is_split_stream_variant():
         return t_combine_split_stream(mutations)
+
+
+def t_sv(var: Any) -> ShadowVariable:
+    return ShadowVariable(var, from_mapping=False)
 
 
 # Init when importing shadow

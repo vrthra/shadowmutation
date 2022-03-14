@@ -14,6 +14,7 @@ from multiprocessing import Pool
 
 
 TAINT_MEMBERS = [
+    "t_sv",
     "t_class",
     "t_wrap",
     "t_combine",
@@ -169,6 +170,7 @@ class ShadowExecutionTransformer(ast.NodeTransformer):
         self.mutation_counter = MutationCounter()
         self.mode = mode
         self.in_class = False
+        self.do_mutate = False
         self.mutations = []
         if ignore_regex is not None:
             self.ignore_regex = re.compile(ignore_regex)
@@ -232,22 +234,88 @@ class c():
     def visit_FunctionDef(self, node):
         if self.ignore_regex is not None and self.ignore_regex.match(node.name):
             # print(f"*NOT* Mutating: {node.name}")
-            return node
+            self.do_mutate = False
+            node = self.generic_visit(node)
+            self.do_mutate = False
         else:
             # print(f"Mutating:       {node.name}")
+            self.do_mutate = True
             node = self.generic_visit(node)
-            if self.mode.is_shadow() and not self.in_class:
-                mutation = ast.parse("""
+            self.do_mutate = False
+
+        if self.mode.is_shadow() and not self.in_class:
+
+        
+            mutation = ast.parse("""
 @t_wrap
 def f():
     pass
-                """).body[0]
+            """).body[0]
                 
-                node.decorator_list.append(mutation.decorator_list[0])
-            return node
+            node.decorator_list.append(mutation.decorator_list[0])
+        return node
 
-    def visit_Assert(self, node):
-        # skip assert statements they are handled in the AssertTransformer
+    def visit_Compare(self, node):
+        node = self.generic_visit(node)
+
+        if len(node.ops) != 1 or len(node.comparators) != 1:
+            adbg(node)
+            raise NotImplementedError(f"Compare is sequence: {node}")
+
+        if self.do_mutate:
+            # # change the compare operator:
+            # #   left == right
+            # # to:
+            cmp_op = node.ops[0]
+            mutations = [
+                None if type(cmp_op) == ast.Eq    else "left == right",
+                None if type(cmp_op) == ast.NotEq else "left != right",
+                None if type(cmp_op) == ast.Lt    else "left <  right",
+                None if type(cmp_op) == ast.LtE   else "left <= right",
+                None if type(cmp_op) == ast.Gt    else "left >  right",
+                None if type(cmp_op) == ast.GtE   else "left >= right",
+                # None if type(cmp_op) == ast.Is    else "left is right",
+            ]
+            
+            variables = [
+                Variable("left", lambda x: x.left, set_attribute("left")),
+                Variable("right", lambda x: x.comparators, set_attribute("comparators")),
+            ]
+
+            node = self._apply_mutations(node, lambda x: x.value, mutations, variables)
+
+        return node
+
+    def visit_BinOp(self, node):
+        node = self.generic_visit(node)
+
+        if self.do_mutate:
+            # # change the operator:
+            # #   left + right
+            # # to:
+            op = node.op
+            mutations = [
+                None if type(op) == ast.Add      else "left + right",
+                None if type(op) == ast.Sub      else "left - right",
+                None if type(op) == ast.Mult     else "left * right",
+                None if type(op) == ast.Div      else "left / right",
+                None if type(op) == ast.Mod      else r"left % right",
+                # None if type(op) == ast.Pow      else "left ** right",
+                None if type(op) == ast.LShift   else "left << right",
+                None if type(op) == ast.RShift   else "left >> right",
+                None if type(op) == ast.BitOr    else "left | right",
+                None if type(op) == ast.BitXor   else "left ^ right",
+                None if type(op) == ast.BitAnd   else "left & right",
+                None if type(op) == ast.FloorDiv else "left // right",
+            ]
+            
+            variables = [
+                Variable("left", lambda x: x.left, set_attribute("left")),
+                Variable("right", lambda x: x.right, set_attribute("right")),
+            ]
+
+            node = self._apply_mutations(node, lambda x: x.value, mutations, variables)
+
         return node
 
     def visit_Assign(self, node):
@@ -289,72 +357,9 @@ def f():
 
         # return node
 
-    def visit_Compare(self, node):
-        node = self.generic_visit(node)
-
-        if len(node.ops) != 1 or len(node.comparators) != 1:
-            adbg(node)
-            raise NotImplementedError(f"Compare is sequence: {node}")
-
-        # # change the compare operator:
-        # #   left == right
-        # # to:
-        cmp_op = node.ops[0]
-        mutations = [
-            None if type(cmp_op) == ast.Eq    else "left == right",
-            None if type(cmp_op) == ast.NotEq else "left != right",
-            None if type(cmp_op) == ast.Lt    else "left <  right",
-            None if type(cmp_op) == ast.LtE   else "left <= right",
-            None if type(cmp_op) == ast.Gt    else "left >  right",
-            None if type(cmp_op) == ast.GtE   else "left >= right",
-            # None if type(cmp_op) == ast.Is    else "left is right",
-        ]
-        
-        variables = [
-            Variable("left", lambda x: x.left, set_attribute("left")),
-            Variable("right", lambda x: x.comparators, set_attribute("comparators")),
-        ]
-
-        node = self._apply_mutations(node, lambda x: x.value, mutations, variables)
-
-        return node
-
-    def visit_BinOp(self, node):
-        node = self.generic_visit(node)
-
-        # # change the operator:
-        # #   left + right
-        # # to:
-        op = node.op
-        mutations = [
-            None if type(op) == ast.Add      else "left + right",
-            None if type(op) == ast.Sub      else "left - right",
-            None if type(op) == ast.Mult     else "left * right",
-            None if type(op) == ast.Div      else "left / right",
-            None if type(op) == ast.Mod      else r"left % right",
-            # None if type(op) == ast.Pow      else "left ** right",
-            None if type(op) == ast.LShift   else "left << right",
-            None if type(op) == ast.RShift   else "left >> right",
-            None if type(op) == ast.BitOr    else "left | right",
-            None if type(op) == ast.BitXor   else "left ^ right",
-            None if type(op) == ast.BitAnd   else "left & right",
-            None if type(op) == ast.FloorDiv else "left // right",
-        ]
-        
-        variables = [
-            Variable("left", lambda x: x.left, set_attribute("left")),
-            Variable("right", lambda x: x.right, set_attribute("right")),
-        ]
-
-        node = self._apply_mutations(node, lambda x: x.value, mutations, variables)
-
-        return node
-
-
     def visit_AnnAssign(self, node):
         node = self.generic_visit(node)
         return node
-        
 
     def visit_AugAssign(self, node):
         node = self.generic_visit(node)
@@ -395,7 +400,6 @@ def f():
     #         return change_to_tainted_call('t_aug_mult')
     #     return node
 
-
     def visit_If(self, node):
         node = self.generic_visit(node)
         if self.mode.is_shadow():
@@ -407,21 +411,54 @@ def f():
             node.test = wrapped_test
         return node
 
+    def wrap_container(self, node):
+        node = self.generic_visit(node)
 
-class AssertTransformer(ast.NodeTransformer):
+        # For shadow mode add class annotation
+        if self.mode.is_shadow():
+            mutation = ast.parse("""t_sv([])""").body[0].value
+            mutation.args = [node]
+            if hasattr(mutation, 'ctx'):
+                mutation.ctx = node.ctx
+            return mutation
+        else:
+            return node
+
+    def visit_Tuple(self, node):
+        return self.wrap_container(node)
+
+    def visit_List(self, node):
+        return self.wrap_container(node)
+
+    def visit_Set(self, node):
+        return self.wrap_container(node)
+
+    def visit_Dict(self, node):
+        return self.wrap_container(node)
+
+    def visit_ListComp(self, node):
+        return self.wrap_container(node)
+
+    def visit_SetComp(self, node):
+        return self.wrap_container(node)
+
+    def visit_DictComp(self, node):
+        return self.wrap_container(node)
+
     def visit_Assert(self, node):
         node = self.generic_visit(node)
-        if isinstance(node.test, ast.Compare) and \
-                len(node.test.ops) == 1 and \
-                isinstance(node.test.ops[0], ast.Eq):
-            call = ast.Call(func=ast.Name(id='t_assert', ctx=ast.Load()),
-                            args=[node.test],
-                            keywords=[])
-            # Wrap the call in an Expr node, because the return value isn't used.
-            newnode = ast.Expr(value=call)
-            ast.copy_location(newnode, node)
-            ast.fix_missing_locations(newnode)
-            return newnode
+        if not self.mode.is_traditional():
+            if isinstance(node.test, ast.Compare) and \
+                    len(node.test.ops) == 1 and \
+                    isinstance(node.test.ops[0], ast.Eq):
+                call = ast.Call(func=ast.Name(id='t_assert', ctx=ast.Load()),
+                                args=[node.test],
+                                keywords=[])
+                # Wrap the call in an Expr node, because the return value isn't used.
+                newnode = ast.Expr(value=call)
+                ast.copy_location(newnode, node)
+                ast.fix_missing_locations(newnode)
+                return newnode
 
         # Remember to return the original node if we don't want to change it.
         return node
@@ -493,7 +530,6 @@ def generate_split_stream(path, res_dir, function_ignore_regex, mutations):
         tree = ast.parse(f.read())
     tree.body.insert(0, ast.parse(f'from shadow import {", ".join(TAINT_MEMBERS)}').body[0])
     tree = ast.fix_missing_locations(ShadowExecutionTransformer(mode, function_ignore_regex).visit(tree))
-    tree = ast.fix_missing_locations(AssertTransformer().visit(tree))
     tree = wrap_final_call(tree)
 
     res_path = res_dir/f"split_stream.py"
@@ -509,7 +545,6 @@ def generate_shadow(path, res_dir, function_ignore_regex, mutations):
         tree = ast.parse(f.read())
     tree.body.insert(0, ast.parse(f'from shadow import {", ".join(TAINT_MEMBERS)}').body[0])
     tree = ast.fix_missing_locations(ShadowExecutionTransformer(mode, function_ignore_regex).visit(tree))
-    tree = ast.fix_missing_locations(AssertTransformer().visit(tree))
 
     res_path = res_dir/f"shadow_execution.py"
 
@@ -522,7 +557,6 @@ def load_and_mutate(path, function_ignore_regex):
         tree = ast.parse(f.read())
     tree.body.insert(0, ast.parse(f'from shadow import {", ".join(TAINT_MEMBERS)}').body[0])
     tree = ast.fix_missing_locations(ShadowExecutionTransformer(function_ignore_regex).visit(tree))
-    tree = ast.fix_missing_locations(AssertTransformer().visit(tree))
     return tree
 
 
@@ -579,5 +613,4 @@ if __name__ == "__main__":
     main()
 
 
-# TODO wrap container types (list, set, dict, tuple)
 # TODO more mutations

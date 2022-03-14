@@ -205,22 +205,38 @@ class ShadowVariable():
 
         elif value_type == list:
             # handle list values
+            active = active_mutants()
+            active.add(MAINLINE)
             combined = {}
             combined[MAINLINE] = []
-            for elem in obj:
+            for ii, elem in enumerate(obj):
                 if type(elem) == ShadowVariable:
                     elem_shadow = elem._shadow
                     # make a copy for each path that is new
-                    for path in elem_shadow.keys():
+                    for path in active:
                         if path not in combined:
-                            combined[path] = deepcopy(combined[MAINLINE])
+                            if MAINLINE in combined:
+                                combined[path] = deepcopy(combined[MAINLINE])
+                            else:
+                                if ii == 0:
+                                    # Still on first element and there is no mainline value, this is ok.
+                                    active.remove(MAINLINE)
+                                    del combined[MAINLINE]
+                                else:
+                                    raise ValueError("Incomplete Shadow")
+
 
                     # append the corresponding path value for each known path
-                    for path in combined.keys():
+                    for path in list(active):
                         if path in elem_shadow:
                             combined[path].append(elem_shadow[path])
-                        else:
+                        elif MAINLINE in elem_shadow:
                             combined[path].append(elem_shadow[MAINLINE])
+                        elif path == MAINLINE:
+                            active.remove(MAINLINE)
+                            del combined[MAINLINE]
+                        else:
+                            raise ValueError("Incomplete Shadow")
 
                 else:
                     for elems in combined.values():
@@ -528,57 +544,68 @@ class ShadowVariable():
             # Need some special handling if __next__ is called, it has influence on control flow.
             # StopIteration is raised once all elements during the iteration have been passed,
             # this can vary if we have different lengths for the wrapped variables.
-            # Currently assert that all variables always either return something or raise StopIteration in the same call.
             method_is_next = name == '__next__'
             if method_is_next:
-                next_returns = 0
-                next_raises = 0
+                next_results: dict[int, bool] = {}
 
             # The method is a builtin, there can not be any mutations in the builtins.
             # Apply the method to each path value and combine the results into a ShadowValue and return that instead.
             untainted_args = untaint_args(*args, **kwargs)
 
-            # Get the arguments for the current logical path, otherwise use mainline.
-            if get_logical_path() in untainted_args:
-                log_args = untainted_args[get_logical_path()]
-            else:
-                log_args = untainted_args[MAINLINE]
-
             all_paths = set(shadow.keys()) | set(untainted_args.keys())
             results = {}
-            for path in all_paths:
-                if path == MAINLINE and get_logical_path() != MAINLINE and get_logical_path() in all_paths:
+            for path in sorted(all_paths):  # Do mainline first.
+                if path != MAINLINE and path not in active_mutants():
+                    # Skip inactive mutants.
                     continue
 
-                # Otherwise the value might be used several times, in that case make a copy.
+                # Get the applicable path value.
                 if path in shadow:
-                    path_val = shadow[path]
+                    initial_path_val = shadow[path]
                 else:
-                    path_val = log_val
-
-                # If the path value is the logical/mainline value copy it as it might be used several times.
-                # Note that the copy step can change the actual function being called, for example a dict_keyiterator
-                # will be turned into a list_iterator. For this reason, avoid copying for __next__, there is no need
-                # for a copy anyway as __next__ does not take arguments.
-                if not method_is_next and (path == MAINLINE or path == get_logical_path()):
-                    path_val = deepcopy(path_val)
+                    initial_path_val = log_val
 
                 # Check that path and log would use the same function.
-                path_func, _ = convert_method_to_function(path_val, name)
+                path_func, _ = convert_method_to_function(initial_path_val, name)
                 if path_func != logical_func:
                     raise NotImplementedError()
 
-                # As for path val, make a copy if needed.
-                if path != MAINLINE and path != get_logical_path() and path in untainted_args:
-                    path_args, path_kwargs = untainted_args[path] or untainted_args.get(MAINLINE)
+                # If the path value is the logical/mainline value copy it as it might be used several times.
+                # Note that the copy step can change the actual function being called, for example a dict_keyiterator
+                # will be turned into a list_iterator. For this reason, avoid copying for __next__.
+                if not method_is_next:
+                    path_val = deepcopy(initial_path_val)
                 else:
-                    path_args, path_kwargs = deepcopy(log_args)
+                    path_val = initial_path_val
+
+                # Get the arguments for the current path, otherwise use mainline.
+                if path in untainted_args:
+                    path_args, path_kwargs = deepcopy(untainted_args[path])
+                else:
+                    path_args, path_kwargs = deepcopy(untainted_args[MAINLINE])
+
 
                 try:
                     results[path] = logical_func(path_val, *path_args, **path_kwargs)
+                except IndexError as e:
+                    if name == '__getitem__':
+                        if path == MAINLINE:
+                            if get_logical_path() == MAINLINE:
+                                raise NotImplementedError()
+
+                            # Not on mainline, kill all active mutants that do not have an alternative path here.
+                            for mut in active_mutants() - all_paths:
+                                add_strongly_killed(mut)
+                        else:
+                            add_strongly_killed(path)
+                        continue
+                    else:
+                        message = traceback.format_exc()
+                        logger.error(f"Error: {e} {message}")
+                        raise NotImplementedError()
                 except StopIteration as e:
                     if method_is_next:
-                        next_raises += 1
+                        next_results[path] = False
                         continue
                     else:
                         raise NotImplementedError()
@@ -588,15 +615,16 @@ class ShadowVariable():
                     raise NotImplementedError()
 
                 if method_is_next:
-                    next_returns += 1
+                    next_results[path] = True
 
-                self._shadow[path] = path_val
+                if initial_path_val != path_val:
+                    self._shadow[path] = path_val
 
             if method_is_next:
-                # OOS: Currently all iterables are expected to iterate the same amount of times.
-                # To support unequal amounts this function needs to support forking.
-                assert next_returns == 0 or next_raises == 0
-                if next_raises > 0:
+                # Handle different lengths of iterables.
+                if t_cond(ShadowVariable(next_results, from_mapping=True)):
+                    return ShadowVariable(results, from_mapping=True)
+                else:
                     raise StopIteration
 
             return ShadowVariable(results, from_mapping=True)
@@ -616,7 +644,7 @@ class ShadowVariable():
                 else:
                     diverging_mutants.append(path)
 
-            from lib.fork import get_forking_context
+            from .fork import get_forking_context
             forking_context = get_forking_context()
             if forking_context is not None:
                 original_path = get_logical_path()
@@ -672,8 +700,10 @@ class ShadowVariable():
         for path in paths:
             if path in shadow:
                 yield path, shadow[path]
-            else:
+            elif MAINLINE in shadow:
                 yield path, shadow[MAINLINE]
+            else:
+                raise NotImplementedError()
             # yield path, self._get(path)
 
         # for path in seen_mutants - masked_mutants - paths:
@@ -736,6 +766,8 @@ class ShadowVariable():
         
         res = {}
         for k in paths:
+            if k != MAINLINE and k not in active_mutants():
+                continue
             op_func = ops[op]
             try:
                 k_res = op_func(args, kwargs, left(k), right(k))
@@ -746,6 +778,9 @@ class ShadowVariable():
                     # logger.debug(f"mainline value exception {e}")
                     raise e
                 continue
+            except TypeError as e:
+                logger.error(f"Unknown Exception: {e}")
+                raise e
             except Exception as e:
                 logger.error(f"Unknown Exception: {e}")
                 raise e
@@ -952,8 +987,10 @@ def t_combine_shadow(mutations: dict[int, Any]) -> Any:
 
     evaluated_mutations = {}
     for mut, res in mutations.items():
-        if (mut not in get_seen_mutants() or mut in get_masked_mutants()) and mut != MAINLINE:
+        # Skip inactive mutants
+        if (mut not in active_mutants()) and mut != MAINLINE:
             continue
+
         if type(res) != ShadowVariable and callable(res):
             if mut != MAINLINE:
                 set_selected_mutant(mut)
@@ -992,6 +1029,54 @@ def t_combine_shadow(mutations: dict[int, Any]) -> Any:
     else:
         raise NotImplementedError()
     return res
+
+
+def t_cond(cond: Any) -> bool:
+
+    if type(cond) == ShadowVariable:
+        diverging_mutants = []
+        companion_mutants = []
+
+        # get the logical path result, this is used to decide which mutations follow the logical path and which do not
+        logical_result = cond._get_logical_res(get_logical_path())
+        assert type(logical_result) == bool, f"{cond}"
+
+        for path, val in cond._all_path_results(get_seen_mutants(), get_masked_mutants()):
+            if path == MAINLINE or path == get_logical_path():
+                continue
+            assert type(val) == bool, f"{cond}"
+            if val == logical_result:
+                companion_mutants.append(path)
+            else:
+                diverging_mutants.append(path)
+
+        from .fork import get_forking_context
+        forking_context = get_forking_context() 
+        if forking_context is not None:
+            original_path = get_logical_path()
+            # Fork if enabled
+            if diverging_mutants:
+                # logger.debug(f"path: {get_logical_path()} masked: {get_masked_mutants()} seen: {get_seen_mutants()} companion: {companion_mutants} diverging: {diverging_mutants}")
+                # select the path to follow, just pick first
+                path = diverging_mutants[0]
+                if forking_context.maybe_fork(path):
+                    # we are now in the forked child
+                    add_masked_mutants(set(companion_mutants + [original_path]))
+                    return t_cond(cond)
+                else:
+                    add_masked_mutants(set(diverging_mutants))
+        else:
+            # Follow the logical path, if that is not the same as mainline mark other mutations as inactive
+            if diverging_mutants:
+                add_masked_mutants(set(diverging_mutants))
+
+        return logical_result
+
+    elif type(cond) == bool:
+        return cond
+    
+    else:
+        raise ValueError(f"Unhandled t_cond type: {cond}")
 
 
 def shadow_assert(cmp_result):

@@ -115,7 +115,6 @@ def compute_exp(x: int, accuracy: int) -> Optional[int]:
 
 def test_approx_exp() -> None:
     res = compute_exp(3, 2)
-    print(res)
     assert res == 103
 
 test_approx_exp()

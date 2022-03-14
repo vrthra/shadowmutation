@@ -114,8 +114,11 @@ def no_fork_wrap(f, *args, **kwargs):
             assert active_mut not in tainted_return
             if active_mut in shadow:
                 tainted_return[active_mut] = shadow[active_mut]
-            else:
+            elif MAINLINE in shadow:
                 tainted_return[active_mut] = shadow[MAINLINE]
+            else:
+                # Do not add to done paths.
+                continue
             done_paths.add(active_mut)
 
         if get_logical_path() == before_logical_path:
