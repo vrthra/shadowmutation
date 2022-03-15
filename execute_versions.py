@@ -261,6 +261,16 @@ def main():
     assert sf_p_total == sf_p_subj_count, f"{sf_p_total}, {sf_p_subj_count}"
     assert sfc_c_total == sfc_subj_count
 
+    num_lines = len([ll for ll in (Path(args.dir)/'traditional_0.py').read_text().splitlines() if ll.strip()]) - 1 # ignore shadow lib imports
+
+    unfiltered = [int(p.stem.split('_')[1]) for p in Path(args.dir).glob('traditional_*.py')]
+    max_unfiltered = max(unfiltered)
+    max_filtered = max(int(p.stem.split('_')[1]) for p in (Path(args.dir)/'mypy_filtered').glob('traditional_*.py'))
+    total_num_muts = max((max_unfiltered, max_filtered))
+    filtered_num_muts = len(unfiltered) - 1 # -1 as traditional_0.py is not a mutated version
+
+    print(num_lines, max_unfiltered, max_filtered, total_num_muts, filtered_num_muts)
+
     data = {
         'mode':       ['traditional',   'split_stream', 'modulo_eqv',    'shadow',     'shadow_cache', 'shadow_fork_child', 'shadow_fork_parent', 'shadow_fork_cache'],
         'killed':     [trad_killed,      ss_killed,      mod_killed,      s_killed,     sc_killed,      sf_c_killed,         sf_p_killed,          sfc_killed],
@@ -269,6 +279,9 @@ def main():
         'runtime':    [trad_runtime,     ss_runtime,     mod_runtime,     s_runtime,    sc_runtime,     sf_c_runtime,        sf_p_runtime,         sfc_runtime],
         'subj_dict':  [trad_subj_line,   ss_subj_line,   mod_subj_line,   s_subj_line,  sc_subj_line,   sf_c_subj_line,      sf_p_subj_line,       sfc_subj_line],
         'tool_dict':  [trad_tool_line,   ss_tool_line,   mod_tool_line,   s_tool_line,  sc_tool_line,   sf_c_tool_line,      sf_p_tool_line,       sfc_tool_line],
+        'num_lines': num_lines,
+        'total_num_muts': total_num_muts,
+        'filtered_num_muts': filtered_num_muts,
     }
 
     with open(Path(args.dir)/'res.json', 'wt') as f:
@@ -277,5 +290,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-# TODO file line and mutation count

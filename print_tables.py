@@ -55,7 +55,24 @@ def print_table(data, key, val_format):
     print(r'\\')
 
 
+"""
+Subject       & LOC & Mutants \\
+\hline
+\pgmcaesarcypher & 42  & 55 \\
+\pgmentropy      & 19  & 46 \\
+\pgmeuler        & 19  & 35 \\
+\pgmnewton       & 15  & 39 \\
+\pgmprime     & 24  & 58 \\
+"""
 
+def subject_stats(data):
+    print(r"Subject       & LOC & Mutants \\")
+    print(hline)
+    for prog, prog_data in data.items():
+        print(prog_cmd(prog), end=' ')
+        print(" & ", prog_data['num_lines'], end=' ')
+        print(" & ", prog_data['filtered_num_muts'], end=' ')
+        print(r"\\")
 
 
 def main() -> None:
@@ -72,6 +89,9 @@ def main() -> None:
     print("="*80)
     print_table(data, 'runtime', '.2f')
     print("="*80)
+
+    print(data['euler'].keys())
+    subject_stats(data)
 
 
 if __name__ == "__main__":
