@@ -8,10 +8,12 @@ from typing import Any, Dict, Tuple, Union
 
 OLD_TRACE = sys.gettrace()
 
-LAST_TRACED_LINE: Union[Tuple[str, int], None] = None
+LAST_TRACED_SUBJECT_LINE: Union[Tuple[str, int], None] = None
+LAST_TRACED_TOOL_LINE: Union[Tuple[str, int], None] = None
 SUBJECT_COUNTER = 0
 TOOL_COUNTER = 0
 SUBJECT_COUNTER_DICT: Dict[Tuple[str, int], int] = {}
+TOOL_COUNTER_DICT: Dict[Tuple[str, int], int] = {}
 
 IGNORE_FILES = set([
     "__init__.py",
@@ -60,18 +62,28 @@ TOOL_FILES = set([
 def reset_lines() -> None:
     global SUBJECT_COUNTER
     global SUBJECT_COUNTER_DICT
+    global TOOL_COUNTER_DICT
     global TOOL_COUNTER
+    global LAST_TRACED_TOOL_LINE
+    global LAST_TRACED_SUBJECT_LINE
     SUBJECT_COUNTER = 0
-    SUBJECT_COUNTER_DICT = defaultdict(int)
     TOOL_COUNTER = 0
+    SUBJECT_COUNTER_DICT = defaultdict(int)
+    TOOL_COUNTER_DICT = defaultdict(int)
+
+    LAST_TRACED_TOOL_LINE = None
+    LAST_TRACED_SUBJECT_LINE = None
 
 
 def trace_func(frame: Any, event: Any, arg: Any) -> Any:
-    global LAST_TRACED_LINE
+    global LAST_TRACED_TOOL_LINE
+    global LAST_TRACED_SUBJECT_LINE
     global SUBJECT_COUNTER
     global SUBJECT_COUNTER_DICT
     global TOOL_COUNTER
-    global CACHE_PATH
+
+    if event != 'line':
+        return trace_func
 
     fname = frame.f_code.co_filename
     fname_sub = Path(fname)
@@ -79,13 +91,6 @@ def trace_func(frame: Any, event: Any, arg: Any) -> Any:
 
     if fname_sub_name in IGNORE_FILES:
         # logger.debug(f"ignored: {fname_sub.name} {frame.f_code.co_name} {frame.f_code.co_firstlineno}")
-        return trace_func
-
-    # frame.f_trace_opcodes = True
-
-    # logger.debug(f"{dir(frame)}")
-    # logger.debug(f"{frame}")
-    if event != 'line':
         return trace_func
 
     if frame.f_code.co_name in [
@@ -100,18 +105,19 @@ def trace_func(frame: Any, event: Any, arg: Any) -> Any:
     if not (is_subject_file or is_tool_file):
         assert False, f"Unknown file: {fname}, add it to the top of shadow.py"
 
+    cur_line: Tuple[str, int] = (fname_sub.name, frame.f_lineno)
+    # logger.debug(f"{cur_line} {LAST_TRACED_LINE}")
 
     if is_tool_file:
-        # logger.debug(f"tool: {fname_sub.name} {frame.f_code.co_name} {frame.f_code.co_firstlineno}")
-        TOOL_COUNTER += 1
-    else:
-        cur_line: Tuple[str, int] = (fname_sub.name, frame.f_lineno)
-        # logger.debug(f"{cur_line} {LAST_TRACED_LINE}")
-        if cur_line == LAST_TRACED_LINE:
+        if cur_line == LAST_TRACED_TOOL_LINE:
             return trace_func
-        LAST_TRACED_LINE = cur_line
-
-        # logger.debug(f"subject: {fname_sub.name} {frame.f_code.co_name} {frame.f_lineno}")
+        LAST_TRACED_TOOL_LINE = cur_line
+        TOOL_COUNTER += 1
+        TOOL_COUNTER_DICT[cur_line] += 1
+    else:
+        if cur_line == LAST_TRACED_SUBJECT_LINE:
+            return trace_func
+        LAST_TRACED_SUBJECT_LINE = cur_line
         SUBJECT_COUNTER += 1
         SUBJECT_COUNTER_DICT[cur_line] += 1
 
@@ -119,9 +125,9 @@ def trace_func(frame: Any, event: Any, arg: Any) -> Any:
 
 
 def reinit_trace() -> None:
+    reset_lines()
     if os.environ.get("TRACE", "0") == "1":
         sys.settrace(trace_func)
-        reset_lines()
 
 
 def disable_line_counting() -> None:
@@ -133,12 +139,18 @@ def get_counter_results() -> dict:
     res['subject_count'] = SUBJECT_COUNTER
     res['subject_count_lines'] = sorted(SUBJECT_COUNTER_DICT.items(), key=lambda x: x[0])
     res['tool_count'] = TOOL_COUNTER
+    res['tool_count_lines'] = sorted(TOOL_COUNTER_DICT.items(), key=lambda x: x[0])
     return res
 
 
 def add_subject_counter(count: int) -> None:
     global SUBJECT_COUNTER
     SUBJECT_COUNTER += count
+
+
+def add_tool_counter(count: int) -> None:
+    global TOOL_COUNTER
+    TOOL_COUNTER += count
 
 
 def add_subject_counter_dict(counter_dict: list[tuple[str, int]]) -> None:
@@ -149,6 +161,9 @@ def add_subject_counter_dict(counter_dict: list[tuple[str, int]]) -> None:
         SUBJECT_COUNTER_DICT[key] += v
 
 
-def add_tool_counter(count: int) -> None:
-    global TOOL_COUNTER
-    TOOL_COUNTER += count
+def add_tool_counter_dict(counter_dict: list[tuple[str, int]]) -> None:
+    global TOOL_COUNTER_DICT
+    for k, v in counter_dict:
+        file, line = k
+        key: tuple[str, int] = (file, int(line))
+        TOOL_COUNTER_DICT[key] += v

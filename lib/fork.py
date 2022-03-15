@@ -13,7 +13,7 @@ from lib.utils import MAINLINE
 
 from lib.path import get_logical_path, get_masked_mutants, get_seen_mutants, load_shared, merge_strongly_killed, save_shared, set_logical_path, t_get_killed
 from .mode import get_execution_mode
-from .line_counter import add_subject_counter, add_subject_counter_dict, add_tool_counter, get_counter_results, reset_lines
+from .line_counter import add_subject_counter, add_subject_counter_dict, add_tool_counter, add_tool_counter_dict, get_counter_results, reset_lines
 from .shadow_variable import ShadowVariable, set_new_no_init, unset_new_no_init, get_active_shadow
 
 import logging
@@ -72,6 +72,7 @@ def publish_child_results(childrens_results: list[dict[str, Any]]) -> None:
         add_subject_counter(child_results['subject_count'])
         add_tool_counter(child_results['tool_count'])
         add_subject_counter_dict(child_results['subject_count_lines'])
+        add_tool_counter_dict(child_results['tool_count_lines'])
 
 
 class Forker():
