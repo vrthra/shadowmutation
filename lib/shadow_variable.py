@@ -3,7 +3,6 @@
 from __future__ import annotations
 from copy import deepcopy
 from itertools import chain
-import os
 import traceback
 import types
 from typing import Any, Callable, Dict, Iterable, Tuple, TypeVar, Union
@@ -132,6 +131,15 @@ def convert_method_to_function(obj: object, method_name: str) -> Tuple[Callable[
         return object.__getattribute__(type(obj), method_name), True
     else:
         return method.__func__, False
+
+
+def shadow_get(shadow, path) -> Any:
+    if path in shadow:
+        return shadow[path]
+    elif MAINLINE in shadow:
+        return shadow[MAINLINE]
+    else:
+        raise ValueError()
 
 
 class ShadowVariable():
@@ -380,10 +388,7 @@ class ShadowVariable():
 
             if type(val) == ShadowVariable:
                 val = val._shadow
-                if mut_id in val:
-                    combined[mut_id] = val[mut_id]
-                else:
-                    combined[mut_id] = val[MAINLINE]
+                combined[mut_id] = shadow_get(val, mut_id)
             else:
                 assert mut_id not in combined
                 combined[mut_id] = val
@@ -414,42 +419,21 @@ class ShadowVariable():
             try:
                 existing_copy_var = cur_copy.__getattribute__(var_name)
             except AttributeError:
-                # var does not exist yet
-                cur_copy.__setattr__(var_name, to_be_copied_var)
-            else:
-                # TODO implement copying of complex nested objects
-                raise NotImplementedError()
-                # if to_be_copied_var == existing_copy_var:
-                #     continue
+                # Var does not exist yet, just assign it.
+                try:
+                    cur_copy.__setattr__(var_name, deepcopy(to_be_copied_var))
+                except TypeError:
+                    raise NotImplementedError("Can not deepcopy variable.")
+                # All done with this var.
+                continue
 
-                # try:
-                #     copied_var = deepcopy(copied_var)
-                # except TypeError:
-                #     raise NotImplementedError()
+            # Skip if is the same bound method as for mainline.
+            if callable(existing_copy_var) and hasattr(existing_copy_var, '__self__'):
+                assert existing_copy_var.__func__ == to_be_copied_var.__func__
+                continue
 
-                # logger.debug(f"{copied_var}")
-
-                # cur_copy.__setattr__(var_name, copied_var)
-
-                #     parts = dir(cur)
-                #     logger.debug(f"{parts}")
-                #     for part in parts:
-                #         if part.startswith("_"):
-                #             continue
-                #         cur_path.append(part)
-                #         val = cur.__getattribute__(part)
-                #         logger.debug(f"{cur_path} = {val}")
-                #         part_type = type(val)
-                #         if part_type == ShadowVariable:
-                #             logger.debug(f"found sv: {cur_path}")
-                #             locations.append((deepcopy(cur_path), val))
-                #             contained_shadow_paths |= set(val._get_paths())
-                #         else:
-                #             raise NotImplementedError(f"Unhandled type: {part_type}")
-                #         # get list of all locations that contain shadow variables
-                #         # make recursive, with loop detection
-
-                # return locations, contained_shadow_paths
+            # OOS Implement copying of objects where attributes already exist.
+            raise NotImplementedError()
 
         self._shadow[new_path] = copy
 
@@ -475,7 +459,7 @@ class ShadowVariable():
                 {'': lambda _1, _2, obj, new_val: obj.__setattr__(name, new_val)},
                 self_shadow.keys(),
                 lambda k: self_shadow[k],
-                lambda k: value._get(k),
+                lambda k: shadow_get(other_shadow, k),
                 tuple(),
                 dict(),
                 '',
@@ -486,7 +470,7 @@ class ShadowVariable():
                 {'': lambda _1, _2, obj, new_val: obj.__setattr__(name, new_val)},
                 self_shadow.keys(),
                 lambda k: self_shadow[k],
-                lambda k: value,
+                lambda _: value,
                 tuple(),
                 dict(),
                 '',
@@ -681,9 +665,6 @@ class ShadowVariable():
     def _keep_active(self, seen: set[int], masked: set[int]) -> None:
         self._shadow = get_active(self._shadow, seen, masked)
 
-    def _get(self, mut) -> Any:
-        return self._shadow[mut]
-
     def _get_logical_res(self, logical_path: int) -> Any:
         if logical_path in self._shadow:
             return self._shadow[logical_path]
@@ -698,16 +679,7 @@ class ShadowVariable():
             yield MAINLINE, shadow[MAINLINE]
 
         for path in paths:
-            if path in shadow:
-                yield path, shadow[path]
-            elif MAINLINE in shadow:
-                yield path, shadow[MAINLINE]
-            else:
-                raise NotImplementedError()
-            # yield path, self._get(path)
-
-        # for path in seen_mutants - masked_mutants - paths:
-        #     yield path, self._get(MAINLINE)
+            yield path, shadow_get(shadow, path)
 
     def _add_mut_result(self, mut: int, res: Any) -> None:
         assert mut not in self._shadow
@@ -1084,7 +1056,7 @@ def shadow_assert(cmp_result):
         # Do the actual assertion as would be done in the unchanged program but only for mainline execution
         if get_logical_path() == MAINLINE:
             # This assert should never fail for a green test suite
-            assert cmp_result._get(MAINLINE) is True, f"{cmp_result}"
+            assert cmp_result._shadow[MAINLINE] is True, f"{cmp_result}"
 
         for path, res in cmp_result._all_path_results(get_seen_mutants(), get_masked_mutants()):
             if path == MAINLINE and get_logical_path() != MAINLINE:

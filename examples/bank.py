@@ -8,21 +8,17 @@ class BankAccount:
         self.update_overdrawn()
 
     def update_overdrawn(self) -> None:
-        if self.balance >= 100:
+        if self.balance >= 0:
             self.overdrawn = False
-        elif self.balance >= 0:
-            self.overdrawn = False
-        elif self.balance < -100:
-            self.overdrawn = True
         else:
             self.overdrawn = True
 
     def deposit(self, amount: int) -> None:
-        self.balance += amount
+        self.balance = self.balance + amount
         self.update_overdrawn()
 
     def withdraw(self, amount: int) -> None:
-        self.balance -= amount
+        self.balance = self.balance - amount
         self.update_overdrawn()
 
     def is_overdrawn(self) -> bool:

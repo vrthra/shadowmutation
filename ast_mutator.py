@@ -171,6 +171,7 @@ class ShadowExecutionTransformer(ast.NodeTransformer):
         self.mode = mode
         self.in_class = False
         self.do_mutate = False
+        self.is_mutated = False
         self.mutations = []
         if ignore_regex is not None:
             self.ignore_regex = re.compile(ignore_regex)
@@ -262,7 +263,7 @@ def f():
             adbg(node)
             raise NotImplementedError(f"Compare is sequence: {node}")
 
-        if self.do_mutate:
+        if self.do_mutate and not self.is_mutated:
             # # change the compare operator:
             # #   left == right
             # # to:
@@ -283,13 +284,14 @@ def f():
             ]
 
             node = self._apply_mutations(node, lambda x: x.value, mutations, variables)
+            self.is_mutated = True
 
         return node
 
     def visit_BinOp(self, node):
         node = self.generic_visit(node)
 
-        if self.do_mutate:
+        if self.do_mutate and not self.is_mutated:
             # # change the operator:
             # #   left + right
             # # to:
@@ -315,90 +317,63 @@ def f():
             ]
 
             node = self._apply_mutations(node, lambda x: x.value, mutations, variables)
+            self.is_mutated = True
 
         return node
+
+    def maybe_mutate_assign(self, node):
+        if self.do_mutate and not self.is_mutated:
+
+            # do not mutate list assignments or func assignments (var = [] / var = fun(...))
+            if type(node.value) == ast.List or type(node.value) == ast.Call:
+                return node
+
+            if type(node.value) == ast.Call and node.value.func.id == "t_combine":
+                assign_is_mutated = True
+            else:
+                assign_is_mutated = False
+
+            if self.mode.is_split_stream() or self.mode.is_shadow():
+                mut_container = MutContainer()
+                mut_container.add(0, node.value)
+
+            for mutation in [
+                "right != 1",
+                "right + 1",
+                "right * 2",
+                "not right",
+            ]:
+                cur_mut_ctr = self.mutation_counter.get()
+                if assign_is_mutated:
+                    continue
+                mutation = ast.parse(mutation)
+                if self.mode.is_traditional() and self.mode.mut_is_active(cur_mut_ctr):
+                    mutation = apply(ReplaceNameTransformer("right", node.value), mutation.body[0].value)
+                    node.value = mutation
+                elif (self.mode.is_split_stream() or self.mode.is_shadow()) and self.mode.mut_is_active(cur_mut_ctr):
+                    mutation = apply(ReplaceNameTransformer("right", deepcopy(node.value)), mutation.body[0].value)
+                    mut_container.add(cur_mut_ctr, mutation)
+                self.mutations.append(cur_mut_ctr)
+
+            if not assign_is_mutated and (self.mode.is_split_stream() or self.mode.is_shadow()):
+                node.value = mut_container.finalize()
+
+            self.is_mutated = True
 
     def visit_Assign(self, node):
+        self.is_mutated = False
         node = self.generic_visit(node)
+        self.maybe_mutate_assign(node)
         return node
 
-        # # do not mutate list assignments (var = [])
-        # if type(node.value) == ast.List:
-        #     return node
-
-        # if type(node.value) == ast.Call and node.value.func.id == "t_combine":
-        #     assign_is_mutated = True
-        # else:
-        #     assign_is_mutated = False
-
-        # if self.mode.is_split_stream() or self.mode.is_shadow():
-        #     mut_container = MutContainer()
-        #     mut_container.add(0, node.value)
-
-        # for mutation in [
-        #     # "right != 1",
-        #     "right + 1",
-        #     "right * 2",
-        # ]:
-        #     cur_mut_ctr = self.mutation_counter.get()
-        #     if assign_is_mutated:
-        #         continue
-        #     mutation = ast.parse(mutation)
-        #     if self.mode.is_traditional() and self.mode.mut_is_active(cur_mut_ctr):
-        #         mutation = apply(ReplaceNameTransformer("right", node.value), mutation.body[0].value)
-        #         node.value = mutation
-        #     elif (self.mode.is_split_stream() or self.mode.is_shadow()) and self.mode.mut_is_active(cur_mut_ctr):
-        #         mutation = apply(ReplaceNameTransformer("right", deepcopy(node.value)), mutation.body[0].value)
-        #         mut_container.add(cur_mut_ctr, mutation)
-        #     self.mutations.append(cur_mut_ctr)
-
-        # if not assign_is_mutated and (self.mode.is_split_stream() or self.mode.is_shadow()):
-        #     node.value = mut_container.finalize()
-
-        # return node
-
     def visit_AnnAssign(self, node):
+        self.is_mutated = False
         node = self.generic_visit(node)
+        self.maybe_mutate_assign(node)
         return node
 
     def visit_AugAssign(self, node):
-        node = self.generic_visit(node)
-        return node
-        # adbg(node)
-        # raise NotImplementedError()
-    #     node = self.generic_visit(node)
-    #     def change_to_tainted_call(call_id):
-    #         global mutation_counter
-    #         cur_mut_ctr = ast.Constant(mutation_counter.get(), 'int')
-    #         # Create the call to the tainted version of the assign.
-    #         call = ast.Call(
-    #             func=ast.Name(id=call_id, ctx=ast.Load()),
-    #             args=[cur_mut_ctr, node.target, node.value],
-    #             keywords=[]
-    #         )
-    #         call = apply_transformer(CtxToLoadTransformer(), call)
-
-    #         # Create the left hand side of the expression
-    #         assign_target = deepcopy(node.target)
-    #         if isinstance(assign_target, ast.Attribute) and isinstance(assign_target.value, ast.Name):
-    #             assign_target.ctx = ast.Store()
-    #         else:
-    #             raise ValueError(f"Unknown assign_target type: {ast.dump(assign_target, indent=4)}")
-
-    #         # This is now an Assign node
-    #         newnode = ast.Assign([assign_target], call)
-    #         ast.copy_location(newnode, node)
-    #         ast.fix_missing_locations(newnode)
-    #         return newnode
-
-
-    #     if isinstance(node.op, ast.Add):
-    #         return change_to_tainted_call('t_aug_add')
-    #     if isinstance(node.op, ast.Sub):
-    #         return change_to_tainted_call('t_aug_sub')
-    #     if isinstance(node.op, ast.Mult):
-    #         return change_to_tainted_call('t_aug_mult')
-    #     return node
+        raise NotImplementedError()
 
     def visit_If(self, node):
         node = self.generic_visit(node)

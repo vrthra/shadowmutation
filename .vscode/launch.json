@@ -5,14 +5,25 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "shadow fork",
+            "name": "shadow",
             "type": "python",
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal",
             "env": {
                 "PYTHONPATH": ".",
-                "EXECUTION_MODE": "shadow_fork"
+                "EXECUTION_MODE": "shadow"
+            },
+        },
+        {
+            "name": "shadow fork child",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "env": {
+                "PYTHONPATH": ".",
+                "EXECUTION_MODE": "shadow_fork_child"
             },
         },
         {
