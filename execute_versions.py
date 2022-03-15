@@ -112,7 +112,7 @@ def tool_lines_to_file(path, trad_tool_line, ss_tool_line, mod_tool_line, s_tool
     sf_p_total = 0
     sfc_c_total = 0
     with open(path, 'wt') as f:
-        f.write("trad_tool_line, ss_tool_line, mod_tool_line, s_tool_line, sc_tool_line, sf_c_tool_line, sf_p_tool_line, sfc_tool_line")
+        f.write("trad_tool_line, ss_tool_line, mod_tool_line, s_tool_line, sc_tool_line, sf_c_tool_line, sf_p_tool_line, sfc_tool_line\n")
         for ll in sorted(all_lines):
             trad_c = trad_tool_line.get(ll, 0)
             ss_c = ss_tool_line.get(ll, 0)
