@@ -69,7 +69,6 @@ def fork_wrap(f, *args, **kwargs):
 def no_fork_wrap(f, *args, **kwargs):
     initial_args, initial_kwargs = copy_args(args, kwargs)
     before_logical_path = get_logical_path()
-    before_active = active_mutants()
     before_masked = deepcopy(get_masked_mutants())
 
     remaining_paths = set([get_logical_path()])
@@ -99,6 +98,15 @@ def no_fork_wrap(f, *args, **kwargs):
             copied_args, copied_kwargs = args, kwargs
         else:
             copied_args, copied_kwargs = copy_args(initial_args, initial_kwargs)
+
+        # Filter args and kwargs for currently available, they will be updated with the fork values.
+        for arg in copied_args:
+            if type(arg) == ShadowVariable:
+                arg._keep_active(get_seen_mutants(), get_masked_mutants())
+
+        for arg in copied_kwargs.values():
+            if type(arg) == ShadowVariable:
+                arg._keep_active(get_seen_mutants(), get_masked_mutants())
 
         try:
             res = call_maybe_cache(f, *copied_args, **copied_kwargs)

@@ -28,6 +28,8 @@ IGNORE_FILES = set([
     "abc.py",
     "os.py",
     "re.py",
+    "traceback.py",
+    "linecache.py",
     "copyreg.py",
     "warnings.py",
     "sre_compile.py",
@@ -89,10 +91,6 @@ def trace_func(frame: Any, event: Any, arg: Any) -> Any:
     fname_sub = Path(fname)
     fname_sub_name = fname_sub.name
 
-    if fname_sub_name in IGNORE_FILES:
-        # logger.debug(f"ignored: {fname_sub.name} {frame.f_code.co_name} {frame.f_code.co_firstlineno}")
-        return trace_func
-
     if frame.f_code.co_name in [
         "tool_line_counting", "subject_line_counting", "t_gather_results", "disable_line_counting"
     ]:
@@ -101,8 +99,8 @@ def trace_func(frame: Any, event: Any, arg: Any) -> Any:
     is_subject_file = fname_sub.parent.parent.parent.name == "shadowmutation" and \
         fname_sub.parent.parent.name == "tmp"
     is_tool_file = fname_sub_name in TOOL_FILES
-    assert not (is_subject_file and is_tool_file)
     if not (is_subject_file or is_tool_file):
+        return trace_func
         assert False, f"Unknown file: {fname}, add it to the top of shadow.py"
 
     cur_line: Tuple[str, int] = (fname_sub.name, frame.f_lineno)
@@ -114,12 +112,15 @@ def trace_func(frame: Any, event: Any, arg: Any) -> Any:
         LAST_TRACED_TOOL_LINE = cur_line
         TOOL_COUNTER += 1
         TOOL_COUNTER_DICT[cur_line] += 1
-    else:
+    elif is_subject_file:
         if cur_line == LAST_TRACED_SUBJECT_LINE:
             return trace_func
         LAST_TRACED_SUBJECT_LINE = cur_line
         SUBJECT_COUNTER += 1
         SUBJECT_COUNTER_DICT[cur_line] += 1
+    else:
+        # do not record line
+        pass
 
     return trace_func
 

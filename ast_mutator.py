@@ -520,6 +520,7 @@ def generate_shadow(path, res_dir, function_ignore_regex, mutations):
         tree = ast.parse(f.read())
     tree.body.insert(0, ast.parse(f'from shadow import {", ".join(TAINT_MEMBERS)}').body[0])
     tree = ast.fix_missing_locations(ShadowExecutionTransformer(mode, function_ignore_regex).visit(tree))
+    tree = wrap_final_call(tree)
 
     res_path = res_dir/f"shadow_execution.py"
 
