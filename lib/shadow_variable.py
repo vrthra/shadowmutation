@@ -7,7 +7,7 @@ import traceback
 import types
 from typing import Any, Callable, Dict, Iterable, Tuple, TypeVar, Union
 
-from lib.path import active_mutants, add_function_seen_mutants, add_masked_mutants, add_seen_mutants, add_strongly_killed, get_logical_path, get_masked_mutants, get_seen_mutants, get_selected_mutant, set_selected_mutant
+from lib.path import active_mutants, add_function_seen_mutants, add_masked_mutants, add_seen_mutants, add_strongly_killed, get_logical_path, get_masked_mutants, get_seen_mutants, get_selected_mutant, get_strongly_killed, set_selected_mutant
 from lib.utils import MAINLINE, PRIMITIVE_TYPES, ShadowExceptionStop
 from lib.mode import get_execution_mode
 
@@ -142,6 +142,11 @@ def shadow_get(shadow, path) -> Any:
         raise ValueError()
 
 
+def not_allowed(obj, method, *args, **kwargs) -> None:
+    logger.error("{method} %s %s %s", obj, args, kwargs)
+    raise NotImplementedError("dunder method {method} is not allowed")
+
+
 class ShadowVariable():
     _shadow: dict[int, Any]
     __slots__ = ['_shadow']
@@ -164,8 +169,7 @@ class ShadowVariable():
     for method in DISALLOWED_DUNDER_METHODS:
         exec(f"""
     def {method}(self, *args, **kwargs):
-        logger.error("{method} %s %s %s", self, args, kwargs)
-        raise ValueError("dunder method {method} is not allowed")
+        not_allowed(self, *args, **kwargs)
         """.strip())
 
     for method in PASSTHROUGH_DUNDER_METHODS:
@@ -666,10 +670,11 @@ class ShadowVariable():
         self._shadow = get_active(self._shadow, seen, masked)
 
     def _get_logical_res(self, logical_path: int) -> Any:
-        if logical_path in self._shadow:
-            return self._shadow[logical_path]
+        shadow = self._shadow
+        if logical_path in shadow:
+            return shadow[logical_path]
         else:
-            return self._shadow[MAINLINE]
+            return shadow[MAINLINE]
 
     def _all_path_results(self, seen_mutants, masked_mutants):
         shadow = self._shadow
@@ -680,10 +685,6 @@ class ShadowVariable():
 
         for path in paths:
             yield path, shadow_get(shadow, path)
-
-    def _add_mut_result(self, mut: int, res: Any) -> None:
-        assert mut not in self._shadow
-        self._shadow[mut] = res
 
     def _maybe_untaint(self) -> Union[SV, Any]:
         shadow = self._shadow
@@ -700,16 +701,43 @@ class ShadowVariable():
         return self._maybe_untaint()
 
     def _merge(self, other: Any, seen: set[int], masked: set[int]):
+        self_shadow = self._shadow
         other_type = type(other)
         if other_type == ShadowVariable:
             for path, val in other._all_path_results(seen, masked):
                 if path != MAINLINE:
-                    self._add_mut_result(path, val)
+                    if path in self_shadow:
+                        assert self_shadow[path] == val
+                    else:
+                        self_shadow[path] = val
         elif other_type == dict:
             assert False, f"merge with type not handled: {other}"
         else:
             for aa in seen - masked:
                 self._add_mut_result(aa, other)
+                if aa in self_shadow:
+                    assert self_shadow[aa] == other
+                else:
+                    self_shadow[aa] = other
+
+    def _maybe_overwrite(self, other: Any, seen: set[int], masked: set[int], including_main: bool):
+        self_shadow = self._shadow
+        other_type = type(other)
+        if other_type == ShadowVariable:
+            for path, val in other._all_path_results(seen, masked):
+                if path == MAINLINE and not including_main:
+                    continue
+                if shadow_get(self_shadow, path) != val:
+                    self_shadow[path] = val
+        elif other_type == dict:
+            assert False, f"merge with type not handled: {other}"
+        else:
+            if including_main:
+                self_shadow[MAINLINE] = val
+            for aa in seen - masked:
+                assert aa != MAINLINE
+                if shadow_get(self_shadow, aa) != other:
+                    self_shadow[aa] = val
 
     def _copy(self) -> ShadowVariable:
         set_new_no_init()
@@ -735,24 +763,28 @@ class ShadowVariable():
             left: Callable[..., Any], right: Callable[..., Any],
             args: tuple[Any, ...], kwargs: dict[str, Any], op: str) -> Any:
         global STRONGLY_KILLED
+
+        if MAINLINE in paths:
+            paths = set(paths)
+            paths.remove(MAINLINE)
+            first = set([MAINLINE])
+        else:
+            first = set()
         
         res = {}
-        for k in paths:
+        for k in (*first, *paths):
             if k != MAINLINE and k not in active_mutants():
                 continue
             op_func = ops[op]
             try:
                 k_res = op_func(args, kwargs, left(k), right(k))
-            except (ZeroDivisionError, OverflowError) as e:
+            except (ZeroDivisionError, OverflowError, TypeError, ValueError) as e:
                 if k != MAINLINE:
                     add_strongly_killed(k)
                 else:
                     # logger.debug(f"mainline value exception {e}")
                     raise e
                 continue
-            except TypeError as e:
-                logger.error(f"Unknown Exception: {e}")
-                raise e
             except Exception as e:
                 logger.error(f"Unknown Exception: {e}")
                 raise e
@@ -986,8 +1018,9 @@ def t_combine_shadow(mutations: dict[int, Any]) -> Any:
 
                 # Non-Mainline value causes an exception.
                 else:
-                    # Just mark it as killed
-                    add_strongly_killed(mut)
+                    if mut not in get_strongly_killed():
+                        # Just mark it as killed
+                        add_strongly_killed(mut)
 
                 continue
             finally:
@@ -995,11 +1028,8 @@ def t_combine_shadow(mutations: dict[int, Any]) -> Any:
 
         evaluated_mutations[mut] = res
 
-    if get_execution_mode().is_shadow_variant():
-        res = ShadowVariable(evaluated_mutations, from_mapping=True)
-        res._keep_active(get_seen_mutants(), get_masked_mutants())
-    else:
-        raise NotImplementedError()
+    res = ShadowVariable(evaluated_mutations, from_mapping=True)
+    res._keep_active(get_seen_mutants(), get_masked_mutants())
     return res
 
 

@@ -5,7 +5,7 @@ from functools import wraps
 from itertools import chain
 from lib.utils import MAINLINE, ShadowException, ShadowExceptionStop
 from lib.fork import get_forking_context, new_forking_context, set_forking_context
-from lib.path import active_mutants, get_logical_path, get_masked_mutants, get_seen_mutants, get_strongly_killed, set_logical_path, set_masked_mutants
+from lib.path import active_mutants, get_logical_path, get_masked_mutants, get_seen_mutants, get_strongly_killed, try_next_logical_path, set_logical_path, set_masked_mutants
 from lib.shadow_variable import ShadowVariable, copy_args, set_new_no_init, unset_new_no_init
 from lib.cache import push_cache_stack, pop_cache_stack, call_maybe_cache
 
@@ -20,7 +20,14 @@ def fork_wrap(f, *args, **kwargs):
     forking_context = new_forking_context()
 
     push_cache_stack()
-    res = call_maybe_cache(f, *args, **kwargs)
+    try:
+        res = call_maybe_cache(f, *args, **kwargs)
+    except ShadowExceptionStop:
+        # Mainline should stop, there are not results. Reset forking context and stop path.
+        set_forking_context(old_forking_context)
+        try_next_logical_path()
+        raise ValueError("This should never be reached.")
+
     mainline_result, fork_results = forking_context.wait_for_forks(fork_res=(res, args, kwargs))
     pop_cache_stack()
 
@@ -71,18 +78,22 @@ def no_fork_wrap(f, *args, **kwargs):
     for arg in chain(args, kwargs.values()):
         if type(arg) == ShadowVariable:
             remaining_paths |= arg._get_paths()
+
     remaining_paths -= before_masked
+    if before_logical_path != MAINLINE and MAINLINE in remaining_paths:
+        remaining_paths.remove(MAINLINE)
 
     tainted_return = {}
     push_cache_stack()
     while remaining_paths:
         if before_logical_path in remaining_paths:
-            set_logical_path(before_logical_path)
             remaining_paths.remove(before_logical_path)
+            next_path = before_logical_path
         else:
-            set_logical_path(remaining_paths.pop())
-            assert get_logical_path() not in get_strongly_killed()
-        set_masked_mutants((before_masked | done_paths | get_strongly_killed()) - set((get_logical_path(),)))
+            next_path = remaining_paths.pop()
+
+        set_masked_mutants((before_masked | done_paths | get_strongly_killed()) - set((next_path,)))
+        set_logical_path(next_path)
 
         if get_logical_path() == before_logical_path:
             copied_args, copied_kwargs = args, kwargs
@@ -98,9 +109,7 @@ def no_fork_wrap(f, *args, **kwargs):
             logger.debug(f"shadow exception: {e}")
             remaining_paths -= get_strongly_killed()
             continue 
-        after_active = active_mutants()
         after_masked = deepcopy(get_masked_mutants())
-        new_active = after_active - before_active
         new_masked = after_masked - before_masked
 
         assert type(res) == ShadowVariable
@@ -121,35 +130,36 @@ def no_fork_wrap(f, *args, **kwargs):
                 continue
             done_paths.add(active_mut)
 
-        if get_logical_path() == before_logical_path:
-            # Filter args and kwargs for currently available, they will be updated with the fork values.
-            for arg in args:
-                if type(arg) == ShadowVariable:
-                    arg._keep_active(get_seen_mutants(), get_masked_mutants())
+        # Update the args with the fork values, this is for functions that mutate the arguments.
+        overwrite_main = before_logical_path == get_logical_path()
+        for ii, val in enumerate(copied_args):
+            arg = args[ii]
+            if type(arg) == ShadowVariable:
+                arg._maybe_overwrite(val, get_seen_mutants(), get_masked_mutants(), overwrite_main)
 
-            for arg in kwargs.values():
-                if type(arg) == ShadowVariable:
-                    arg._keep_active(get_seen_mutants(), get_masked_mutants())
+        for key, val in copied_kwargs.items():
+            arg = kwargs[key]
+            if type(arg) == ShadowVariable:
+                arg._maybe_overwrite(val, get_seen_mutants(), get_masked_mutants(), overwrite_main)
 
-        else:
-            # Update the args with the fork values, this is for functions that mutate the arguments.
-            for ii, val in enumerate(copied_args):
-                if type(val) == ShadowVariable:
-                    args[ii]._merge(val, get_seen_mutants(), get_masked_mutants())
-
-            for key, val in copied_kwargs.items():
-                if type(val) == ShadowVariable:
-                    kwargs[key]._merge(val, get_seen_mutants(), get_masked_mutants())
-
-        done_paths |= new_active
-        done_paths.add(get_logical_path())
+        # Update remaining paths.
         remaining_paths |= new_masked
         remaining_paths -= (done_paths | get_strongly_killed())
 
     pop_cache_stack()
 
-    set_logical_path(before_logical_path)
     set_masked_mutants(before_masked | get_strongly_killed())
+
+    # If there are no more active mutants and there is nothing to return just stop immediately.
+    if len(tainted_return) == 0:
+        assert get_logical_path() != MAINLINE
+        assert len(active_mutants()) == 0
+        try_next_logical_path()
+
+    if before_logical_path == MAINLINE or before_logical_path in active_mutants():
+        set_logical_path(before_logical_path)
+    else:
+        try_next_logical_path()
 
     res = ShadowVariable(tainted_return, from_mapping=True)
     return res._maybe_untaint()

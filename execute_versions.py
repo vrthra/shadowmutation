@@ -10,6 +10,9 @@ from pathlib import Path
 from typing import Any, Optional
 
 
+EXEC_WITH_TRACE = os.getenv('EXEC_NO_TRACE', '0') == '0'
+
+
 def run_it(path: Path, trace: bool, mode: Optional[str]=None, logical_path: Optional[str]=None, result_file: Optional[Path]=None, should_not_print: bool=False, timeout: Optional[int]=None) -> CompletedProcess[bytes]:
     # print(path)
     env = deepcopy(os.environ)
@@ -55,18 +58,26 @@ def get_res_inner(path: Path, mode: str, trace: bool, should_not_print: bool=Fal
 
 
 def get_res(path: Path, mode: str, should_not_print: bool=False, timeout: Optional[int]=None) -> dict[str, Any]:
-    trace_res = get_res_inner(path, mode, True, should_not_print, timeout)
+    if EXEC_WITH_TRACE:
+        trace_res = get_res_inner(path, mode, True, should_not_print, timeout)
     time_res = get_res_inner(path, mode, False, should_not_print, timeout)
 
     combined_res = {}
     for kk in ['execution_mode', 'strong', 'exit_code']:
-        assert trace_res[kk] == time_res[kk], f"\n{trace_res}\n{time_res}"
-        combined_res[kk] = trace_res[kk]
+        if EXEC_WITH_TRACE:
+            assert trace_res[kk] == time_res[kk], f"\n{trace_res}\n{time_res}"
+        combined_res[kk] = time_res[kk]
 
-    combined_res['subject_count'] = trace_res['subject_count']
-    combined_res['subject_count_lines'] = trace_res['subject_count_lines']
-    combined_res['tool_count'] = trace_res['tool_count']
-    combined_res['tool_count_lines'] = trace_res['tool_count_lines']
+    if EXEC_WITH_TRACE:
+        combined_res['subject_count'] = trace_res['subject_count']
+        combined_res['subject_count_lines'] = trace_res['subject_count_lines']
+        combined_res['tool_count'] = trace_res['tool_count']
+        combined_res['tool_count_lines'] = trace_res['tool_count_lines']
+    else:
+        combined_res['subject_count'] = 0
+        combined_res['subject_count_lines'] = {}
+        combined_res['tool_count'] = 0
+        combined_res['tool_count_lines'] = {}
 
     combined_res['runtime'] = time_res['runtime']
     return combined_res
@@ -154,7 +165,7 @@ def main():
     trad_tool_line = defaultdict(int)
     traditional_results = {'killed': [], 'alive': [], 'timeout': []}
     for path in sorted(list(Path(args.dir).glob("traditional_*.py"))):
-        res = get_res(path, None, should_not_print=True, timeout=10)
+        res = get_res(path, None, should_not_print=True, timeout=100)
         mut_id = int(path.stem[len('traditional_'):])
         mut_ids.append(mut_id)
         trad_subj_count += res['subject_count']

@@ -65,7 +65,9 @@ def test_split_stream_single_if(mode):
 
     
     reinit(execution_mode=mode, no_atexit=True)
-    t_assert(func(t_combine({0: 0, 1: 1})) == 1)
+    res = func(t_combine({0: 0, 1: 1}))
+    t_assert(res == 1)
+
     assert get_killed() == gen_killed([1])
 
 
@@ -96,7 +98,6 @@ def test_split_stream_double_if(mode):
     reinit(execution_mode=mode, no_atexit=True)
     res = func(t_combine({0: 0, 1: 1, 2: 2, 3: 3, 4: 0, 5: 1, 6: 2, 7: 3}))
     t_assert(res == 0)
-    t_get_killed()
     assert get_killed() == gen_killed([1, 3, 5, 7])
 
 
@@ -122,7 +123,6 @@ def test_split_stream_nested_if_call(mode):
 
     reinit(execution_mode=mode, no_atexit=True)
     t_assert(func(t_combine({0: 0, 1: 1, 2: 2, 3: 3})) == 0)
-    t_get_killed()
     assert get_killed() == gen_killed([1, 3])
 
 
@@ -137,32 +137,35 @@ def test_wrap(mode):
         else:
             return 0
 
+    def do_test(a, b, res):
+        act_res = simple(a, b)
+        t_assert(act_res == res)
+
     # reinit(execution_mode=mode, no_atexit=True)
     # assert simple(0, 1) == 0
 
     reinit(execution_mode=mode, no_atexit=True)
-    t_assert(simple(t_combine({0: 0, 1: 1}), 0) == 0)
+    do_test(t_combine({0: 0, 1: 1}), 0, 0)
     assert get_killed() == gen_killed([1])
 
     reinit(execution_mode=mode, no_atexit=True)
-    t_assert(simple(1, t_combine({0: 0, 1: 1})) == 1)
+    do_test(1, t_combine({0: 0, 1: 1}), 1)
     assert get_killed() == gen_killed([1])
 
     reinit(execution_mode=mode, no_atexit=True)
-    t_assert(simple(t_combine({0: 0, 1: 1}), t_combine({0: 0, 2: 1})) == 0)
+    do_test(t_combine({0: 0, 1: 1}), t_combine({0: 0, 2: 1}), 0)
     assert get_killed() == gen_killed([1])
 
     reinit(execution_mode=mode, no_atexit=True)
-    t_assert(simple(2, t_combine({0: 1, 1: 2})) == 3)
+    do_test(2, t_combine({0: 1, 1: 2}), 3)
     assert get_killed() == gen_killed([1])
 
     reinit(execution_mode=mode, no_atexit=True)
-    res = simple(3, 1)
-    t_assert(res == 0)
+    do_test(3, 1, 0)
     assert get_killed() == gen_killed([10])
 
     reinit(execution_mode=mode, no_atexit=True)
-    t_assert(simple(t_combine({0: 3, 1: 1}), 1) == 0)
+    do_test(t_combine({0: 3, 1: 1}), 1, 0)
     assert get_killed() == gen_killed([1, 10])
 
 
@@ -170,7 +173,7 @@ def test_wrap(mode):
 def test_recursive(mode):
     @t_wrap
     def rec(a):
-        if t_cond(t_combine({0: a == 0, 1: a <= 2})):
+        if t_cond(t_combine({0: a <= 0, 1: a <= 2})):
             return 0
 
         res = rec(a - 1)
@@ -179,7 +182,8 @@ def test_recursive(mode):
         return res
 
     reinit(execution_mode=mode, no_atexit=True)
-    t_assert(rec(t_combine({0: 5, 2: 6})) == 15)
+    res = rec(t_combine({0: 5, 2: 6}))
+    t_assert(res == 15)
     assert get_killed() == gen_killed([1, 2])
 
 
@@ -680,6 +684,129 @@ def test_caesar(mode) ->None:
     dec = caesar(enc, 11, decode=True)
     t_assert(input == dec)
     assert get_killed() == gen_killed([1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 14, 15, 16, 18, 19, 22, 25, 26, 27, 28, 29, 30, 32, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 45, 46, 47, 48, 49, 50, 51, 52, 54, 55, 56, 57, 58, 59, 60])
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_tonelli_shanks(mode) ->None:
+    @t_wrap
+    def pow(base: int, exp: int, mod: int) ->int:
+        res: int = t_combine({(0): lambda : base ** exp, (1): lambda : base + exp, (2): lambda : base - exp, (3): lambda : base * exp, (5): lambda : base % exp, (6): lambda : base << exp, (7): lambda : base >> exp, (8): lambda : base | exp, (9): lambda : base ^ exp, (10): lambda : base & exp, (11): lambda : base // exp})
+        res = t_combine({(0): lambda : res % mod, (12): lambda : res + mod, (13): lambda : res - mod, (14): lambda : res * mod, (16): lambda : res << mod, (17): lambda : res >> mod, (18): lambda : res | mod, (19): lambda : res ^ mod, (20): lambda : res & mod, (21): lambda : res // mod})
+        return res
+
+
+    @t_wrap
+    def legendre_symbol(a: int, p: int) ->int:
+        """
+        Legendre symbol
+        Define if a is a quadratic residue modulo odd prime
+        http://en.wikipedia.org/wiki/Legendre_symbol
+        """
+        ls = t_combine({(0): lambda : p - 1, (22): lambda : p + 1, (23): lambda : p * 1, (25): lambda : p % 1, (26): lambda : p << 1, (27): lambda : p >> 1, (28): lambda : p | 1, (29): lambda : p ^ 1, (30): lambda : p & 1, (31): lambda : p // 1})
+        ls = t_combine({(0): lambda : ls // 2, (32): lambda : ls + 2, (33): lambda : ls - 2, (34): lambda : ls * 2, (36): lambda : ls % 2, (37): lambda : ls << 2, (38): lambda : ls >> 2, (39): lambda : ls | 2, (40): lambda : ls ^ 2, (41): lambda : ls & 2})
+        ls = pow(a, ls, p)
+        p_less = t_combine({(0): lambda : p - 1, (42): lambda : p + 1, (43): lambda : p * 1, (44): lambda : p / 1, (45): lambda : p % 1, (46): lambda : p << 1, (47): lambda : p >> 1, (48): lambda : p | 1, (49): lambda : p ^ 1, (50): lambda : p & 1, (51): lambda : p // 1})
+        if t_cond(ls == p_less):
+            return -1
+        return ls
+
+
+    @t_wrap
+    def prime_mod_sqrt(a: int, p: int) ->list[int]:
+        """
+        Square root modulo prime number
+        Solve the equation
+            x^2 = a mod p
+        and return list of x solution
+        http://en.wikipedia.org/wiki/Tonelli-Shanks_algorithm
+        """
+        a = t_combine({(0): lambda : a % p, (52): lambda : a + p, (53): lambda : a - p, (54): lambda : a * p, (56): lambda : a << p, (57): lambda : a >> p, (58): lambda : a | p, (59): lambda : a ^ p, (60): lambda : a & p, (61): lambda : a // p})
+        if t_cond(a == 0):
+            return t_sv([0])
+        if t_cond(p == 2):
+            return t_sv([a])
+        leg_sym = legendre_symbol(a, p)
+        if t_cond(t_combine({(0): lambda : leg_sym != 1, (62): lambda : leg_sym == 1, (63): lambda : leg_sym < 1, (64): lambda : leg_sym <= 1, (65): lambda : leg_sym > 1, (66): lambda : leg_sym >= 1})):
+            return t_sv([])
+        p_mod = t_combine({(0): lambda : p % 4, (67): lambda : p + 4, (68): lambda : p - 4, (69): lambda : p * 4, (70): lambda : p / 4, (71): lambda : p << 4, (72): lambda : p >> 4, (73): lambda : p | 4, (74): lambda : p ^ 4, (75): lambda : p & 4, (76): lambda : p // 4})
+        if t_cond(p_mod == 3):
+            x = t_combine({(0): lambda : p + 1, (77): lambda : p - 1, (78): lambda : p * 1, (80): lambda : p % 1, (81): lambda : p << 1, (82): lambda : p >> 1, (83): lambda : p | 1, (84): lambda : p ^ 1, (85): lambda : p & 1, (86): lambda : p // 1})
+            x = t_combine({(0): lambda : x // 4, (87): lambda : x + 4, (88): lambda : x - 4, (89): lambda : x * 4, (91): lambda : x % 4, (92): lambda : x << 4, (93): lambda : x >> 4, (94): lambda : x | 4, (95): lambda : x ^ 4, (96): lambda : x & 4})
+            x = pow(a, x, p)
+            return t_sv([x, t_combine({(0): lambda : p - x, (97): lambda : p + x, (98): lambda : p * x, (100): lambda : p % x, (101): lambda : p << x, (102): lambda : p >> x, (103): lambda : p | x, (104): lambda : p ^ x, (105): lambda : p & x, (106): lambda : p // x})])
+        q = t_combine({(0): lambda : p - 1, (107): lambda : p + 1, (108): lambda : p * 1, (110): lambda : p % 1, (111): lambda : p << 1, (112): lambda : p >> 1, (113): lambda : p | 1, (114): lambda : p ^ 1, (115): lambda : p & 1, (116): lambda : p // 1})
+        s = t_combine({(0): lambda : 0, (118): lambda : 0 + 1, (119): lambda : 0 * 2})
+        max_iter = t_combine({(0): lambda : 10, (122): lambda : 10 + 1, (123): lambda : 10 * 2})
+        while True:
+            if t_cond(max_iter <= 0):
+                break
+            q_mod = t_combine({(0): lambda : q % 2, (125): lambda : q + 2, (126): lambda : q - 2, (127): lambda : q * 2, (128): lambda : q / 2, (129): lambda : q << 2, (130): lambda : q >> 2, (131): lambda : q | 2, (132): lambda : q ^ 2, (133): lambda : q & 2, (134): lambda : q // 2})
+            if t_cond(q_mod != 0):
+                break
+            s = t_combine({(0): lambda : s + 1, (135): lambda : s - 1, (136): lambda : s * 1, (138): lambda : s % 1, (139): lambda : s << 1, (140): lambda : s >> 1, (141): lambda : s | 1, (142): lambda : s ^ 1, (143): lambda : s & 1, (144): lambda : s // 1})
+            q = t_combine({(0): lambda : q // 2, (145): lambda : q + 2, (146): lambda : q - 2, (147): lambda : q * 2, (149): lambda : q % 2, (151): lambda : q >> 2, (152): lambda : q | 2, (153): lambda : q ^ 2, (154): lambda : q & 2})
+            max_iter = t_combine({(0): lambda : max_iter - 1, (155): lambda : max_iter + 1, (156): lambda : max_iter * 1, (158): lambda : max_iter % 1, (159): lambda : max_iter << 1, (160): lambda : max_iter >> 1, (161): lambda : max_iter | 1, (162): lambda : max_iter ^ 1, (163): lambda : max_iter & 1, (164): lambda : max_iter // 1})
+        z = t_combine({(0): lambda : 1, (166): lambda : 1 + 1, (167): lambda : 1 * 2})
+        max_iter = t_combine({(0): lambda : 10, (170): lambda : 10 + 1, (171): lambda : 10 * 2, (172): lambda : not 10})
+        while True:
+            if t_cond(max_iter <= 0):
+                break
+            leg_sym = legendre_symbol(z, p)
+            if t_cond(t_combine({(0): lambda : leg_sym == -1, (173): lambda : leg_sym != -1, (174): lambda : leg_sym < -1, (175): lambda : leg_sym <= -1, (176): lambda : leg_sym > -1, (177): lambda : leg_sym >= -1})):
+                break
+            z = t_combine({(0): lambda : z + 1, (178): lambda : z - 1, (179): lambda : z * 1, (181): lambda : z % 1, (182): lambda : z << 1, (183): lambda : z >> 1, (184): lambda : z | 1, (185): lambda : z ^ 1, (186): lambda : z & 1, (187): lambda : z // 1})
+            max_iter = t_combine({(0): lambda : max_iter - 1, (188): lambda : max_iter + 1, (189): lambda : max_iter * 1, (191): lambda : max_iter % 1, (192): lambda : max_iter << 1, (193): lambda : max_iter >> 1, (194): lambda : max_iter | 1, (195): lambda : max_iter ^ 1, (196): lambda : max_iter & 1, (197): lambda : max_iter // 1})
+        c = pow(z, q, p)
+        x = t_combine({(0): lambda : q + 1, (198): lambda : q - 1, (199): lambda : q * 1, (201): lambda : q % 1, (202): lambda : q << 1, (203): lambda : q >> 1, (204): lambda : q | 1, (205): lambda : q ^ 1, (206): lambda : q & 1, (207): lambda : q // 1})
+        x = t_combine({(0): lambda : x // 2, (208): lambda : x + 2, (209): lambda : x - 2, (210): lambda : x * 2, (212): lambda : x % 2, (213): lambda : x << 2, (214): lambda : x >> 2, (215): lambda : x | 2, (216): lambda : x ^ 2, (217): lambda : x & 2})
+        x = pow(a, x, p)
+        t = pow(a, q, p)
+        m = t_combine({(0): lambda : s, (219): lambda : s + 1, (220): lambda : s * 2})
+        max_iter_outer = t_combine({(0): lambda : 10, (223): lambda : 10 + 1, (224): lambda : 10 * 2})
+        while True:
+            if t_cond(max_iter_outer <= 0):
+                break
+            if t_cond(t == 1):
+                break
+            i = t_combine({(0): lambda : 0, (227): lambda : 0 + 1, (228): lambda : 0 * 2})
+            e = t_combine({(0): lambda : 2, (231): lambda : 2 + 1, (232): lambda : 2 * 2})
+            i = t_combine({(0): lambda : 1, (234): lambda : 1 != 1, (235): lambda : 1 + 1, (236): lambda : 1 * 2, (237): lambda : not 1})
+            max_iter_inner = t_combine({(0): lambda : 10, (239): lambda : 10 + 1, (240): lambda : 10 * 2})
+            while True:
+                if t_cond(max_iter_inner <= 0):
+                    break
+                if t_cond(i > m):
+                    break
+                pp = pow(t, e, p)
+                if t_cond(t_combine({(0): lambda : pp == 1, (242): lambda : pp != 1, (243): lambda : pp < 1, (244): lambda : pp <= 1, (245): lambda : pp > 1, (246): lambda : pp >= 1})):
+                    break
+                e = t_combine({(0): lambda : e * 2, (247): lambda : e + 2, (248): lambda : e - 2, (250): lambda : e % 2, (251): lambda : e << 2, (252): lambda : e >> 2, (253): lambda : e | 2, (254): lambda : e ^ 2, (255): lambda : e & 2, (256): lambda : e // 2})
+                i = t_combine({(0): lambda : i + 1, (257): lambda : i - 1, (258): lambda : i * 1, (260): lambda : i % 1, (261): lambda : i << 1, (262): lambda : i >> 1, (263): lambda : i | 1, (264): lambda : i ^ 1, (265): lambda : i & 1, (266): lambda : i // 1})
+                max_iter_inner = t_combine({(0): lambda : max_iter_inner - 1, (267): lambda : max_iter_inner + 1, (268): lambda : max_iter_inner * 1, (270): lambda : max_iter_inner % 1, (271): lambda : max_iter_inner << 1, (272): lambda : max_iter_inner >> 1, (273): lambda : max_iter_inner | 1, (274): lambda : max_iter_inner ^ 1, (275): lambda : max_iter_inner & 1, (276): lambda : max_iter_inner // 1})
+            b = t_combine({(0): lambda : m - i, (277): lambda : m + i, (278): lambda : m * i, (280): lambda : m % i, (281): lambda : m << i, (282): lambda : m >> i, (283): lambda : m | i, (284): lambda : m ^ i, (285): lambda : m & i, (286): lambda : m // i})
+            b = t_combine({(0): lambda : b - 1, (287): lambda : b + 1, (288): lambda : b * 1, (290): lambda : b % 1, (291): lambda : b << 1, (292): lambda : b >> 1, (293): lambda : b | 1, (294): lambda : b ^ 1, (295): lambda : b & 1, (296): lambda : b // 1})
+            b = t_combine({(0): lambda : 2 ** b, (297): lambda : 2 + b, (298): lambda : 2 - b, (299): lambda : 2 * b, (301): lambda : 2 % b, (302): lambda : 2 << b, (303): lambda : 2 >> b, (304): lambda : 2 | b, (305): lambda : 2 ^ b, (306): lambda : 2 & b, (307): lambda : 2 // b})
+            b = pow(c, b, p)
+            x = t_combine({(0): lambda : x * b, (308): lambda : x + b, (309): lambda : x - b, (311): lambda : x % b, (312): lambda : x << b, (313): lambda : x >> b, (314): lambda : x | b, (315): lambda : x ^ b, (316): lambda : x & b, (317): lambda : x // b})
+            x = t_combine({(0): lambda : x % p, (318): lambda : x + p, (319): lambda : x - p, (320): lambda : x * p, (322): lambda : x << p, (323): lambda : x >> p, (324): lambda : x | p, (325): lambda : x ^ p, (326): lambda : x & p, (327): lambda : x // p})
+            t = t_combine({(0): lambda : t * b, (328): lambda : t + b, (329): lambda : t - b, (331): lambda : t % b, (332): lambda : t << b, (333): lambda : t >> b, (334): lambda : t | b, (335): lambda : t ^ b, (336): lambda : t & b, (337): lambda : t // b})
+            t = t_combine({(0): lambda : t * b, (338): lambda : t + b, (339): lambda : t - b, (341): lambda : t % b, (342): lambda : t << b, (343): lambda : t >> b, (344): lambda : t | b, (345): lambda : t ^ b, (346): lambda : t & b, (347): lambda : t // b})
+            t = t_combine({(0): lambda : t % p, (348): lambda : t + p, (349): lambda : t - p, (350): lambda : t * p, (352): lambda : t << p, (353): lambda : t >> p, (354): lambda : t | p, (355): lambda : t ^ p, (356): lambda : t & p, (357): lambda : t // p})
+            c = t_combine({(0): lambda : b * b, (358): lambda : b + b, (359): lambda : b - b, (361): lambda : b % b, (362): lambda : b << b, (363): lambda : b >> b, (364): lambda : b | b, (365): lambda : b ^ b, (366): lambda : b & b, (367): lambda : b // b})
+            c = t_combine({(0): lambda : c % p, (368): lambda : c + p, (369): lambda : c - p, (370): lambda : c * p, (372): lambda : c << p, (373): lambda : c >> p, (374): lambda : c | p, (375): lambda : c ^ p, (376): lambda : c & p, (377): lambda : c // p})
+            m = t_combine({(0): lambda : i, (378): lambda : i != 1, (379): lambda : i + 1, (380): lambda : i * 2, (381): lambda : not i})
+            max_iter_outer = t_combine({(0): lambda : max_iter_outer - 1, (382): lambda : max_iter_outer + 1, (383): lambda : max_iter_outer * 1, (385): lambda : max_iter_outer % 1, (386): lambda : max_iter_outer << 1, (387): lambda : max_iter_outer >> 1, (388): lambda : max_iter_outer | 1, (389): lambda : max_iter_outer ^ 1, (390): lambda : max_iter_outer & 1, (391): lambda : max_iter_outer // 1})
+        return t_sv([x, p - x])
+
+
+    @t_wrap
+    def do_it() ->None:
+        res = prime_mod_sqrt(5, 41)
+        t_assert(res == t_sv([28, 13]))
+
+    reinit(execution_mode=mode, no_atexit=True)
+    do_it()
+    assert get_killed() == gen_killed([1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 18, 19, 20, 21, 22, 25, 26, 27, 30, 32, 33, 34, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 50, 51, 54, 56, 57, 58, 59, 60, 61, 62, 64, 66, 107, 108, 110, 111, 112, 113, 115, 116, 118, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 149, 151, 152, 153, 154, 158, 163, 172, 173, 174, 176, 177, 178, 179, 181, 182, 183, 184, 185, 186, 187, 191, 196, 198, 199, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 212, 213, 214, 215, 216, 217, 219, 220, 231, 232, 234, 235, 236, 237, 242, 243, 245, 246, 253, 255, 256, 257, 258, 260, 262, 263, 264, 265, 266, 277, 278, 280, 281, 282, 283, 284, 285, 286, 287, 288, 291, 293, 295, 296, 297, 298, 299, 301, 302, 303, 304, 305, 306, 307, 308, 309, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 322, 323, 324, 325, 326, 327, 328, 329, 331, 332, 333, 334, 335, 336, 337, 338, 339, 341, 342, 343, 344, 345, 346, 347, 348, 349, 350, 352, 353, 354, 355, 356, 357, 358, 359, 361, 362, 363, 364, 365, 366, 367, 370, 372, 373, 374, 375, 376, 377, 378, 379, 380, 381, 385, 390])
 
 
 #################################################

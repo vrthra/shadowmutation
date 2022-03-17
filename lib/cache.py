@@ -9,7 +9,7 @@ import traceback
 from typing import Any, Iterable, Union
 from lib.utils import MAINLINE, ShadowException, ShadowExceptionStop
 from lib.mode import get_execution_mode
-from lib.path import active_mutants, add_function_seen_mutants, add_masked_mutants, add_seen_mutants, get_function_seen_masked, get_logical_path, get_masked_mutants, get_seen_mutants, remove_masked_mutants, reset_function_seen_masked, set_logical_path
+from lib.path import active_mutants, add_function_seen_mutants, add_masked_mutants, add_seen_mutants, get_logical_path, get_masked_mutants, get_seen_mutants, remove_masked_mutants, set_logical_path, reset_function_seen, reset_function_masked, get_function_seen
 from lib.shadow_variable import ShadowVariable, copy_args, set_new_no_init, unset_new_no_init, untaint_args
 from lib.fork import get_forking_context
 import logging
@@ -17,16 +17,19 @@ logger = logging.getLogger(__name__)
 
 
 _CACHE_PATH: Union[str, None] = None
+_PARENT_FUNCTION_SEEN: list[set[int]] = []
 
 
 def reinit_cache() -> None:
     global _CACHE_PATH
+    global _PARENT_FUNCTION_SEEN
     mode = get_execution_mode()
 
     if mode.uses_cache():
         fd, name = tempfile.mkstemp()
         os.close(fd)
         _CACHE_PATH = name
+        _PARENT_FUNCTION_SEEN = []
     else:
         _CACHE_PATH = None
     pass
@@ -78,7 +81,13 @@ def save_cache(cache, mut_stack):
 
 
 def push_cache_stack():
+    global _PARENT_FUNCTION_SEEN
     if _CACHE_PATH is not None:
+        fun_seen = get_function_seen()
+        _PARENT_FUNCTION_SEEN.append(set())
+        for par in _PARENT_FUNCTION_SEEN:
+            par |= fun_seen
+        reset_function_seen()
         cache, mut_stack = load_cache()
         mut_stack.append(set())
         save_cache(cache, mut_stack)
@@ -86,6 +95,9 @@ def push_cache_stack():
 
 def pop_cache_stack():
     if _CACHE_PATH is not None:
+        # Restore the currently seen muts to adding those of the calling function.
+        par_seen = _PARENT_FUNCTION_SEEN.pop()
+        add_function_seen_mutants(par_seen)
         cache, mut_stack = load_cache()
         mut_stack.pop()
         save_cache(cache, mut_stack)
@@ -113,9 +125,8 @@ def function_is_wrapped(func):
     return True
 
 
-def reset_path_variables(starting_logical, before_logical, before_seen, added_mask):
-    # To the currently seen muts also restore those of the calling function.
-    add_function_seen_mutants(before_seen)
+def reset_path_variables(starting_logical, before_logical, added_mask):
+    remove_masked_mutants(added_mask)
 
     logical_path_after_func = get_logical_path()
     if logical_path_after_func != starting_logical:
@@ -124,10 +135,6 @@ def reset_path_variables(starting_logical, before_logical, before_seen, added_ma
     else:
         # Restore logical path
         set_logical_path(before_logical)
-
-    # Reset masked mutants to those that were already masked adding those that are new from the current call.
-    _, in_function_added_mask = get_function_seen_masked()
-    remove_masked_mutants(added_mask - in_function_added_mask)
 
 
 def call_maybe_cache(f, *args, **kwargs):
@@ -149,8 +156,6 @@ def call_maybe_cache(f, *args, **kwargs):
         # Load cache
         cache, mut_stack = load_cache()
 
-        before_function_seen, before_function_masked = get_function_seen_masked()
-
         # For each path check if function / args combo is cached.
         before_logical_path = get_logical_path()
         mut_is_cached = {}
@@ -158,25 +163,31 @@ def call_maybe_cache(f, *args, **kwargs):
             # Never load cached mainline if we are on mainline.
             if mut == MAINLINE == get_logical_path():
                 continue
-            key = f"{f.__name__, mut_args, mut_kwargs}"
+            key = f"{f.__name__, mut_args, mut_kwargs}"  # OOS more efficient key
 
             if key in cache:
                 cached_return_res, cached_arguments, cached_seen_muts = cache[key]
-                if mut not in cached_seen_muts:
+                if mut == MAINLINE:
+                    cached = active_mutants() - (untainted_args.keys() - set([MAINLINE])) - cached_seen_muts
+                elif mut not in cached_seen_muts:
+                    cached = set([mut])
+                else:
+                    continue
+
+                if cached:
+                    add_masked_mutants(cached - set([MAINLINE]))
                     add_seen_mutants(cached_seen_muts - set([MAINLINE]))
-                    mut_is_cached[mut] = (cached_return_res, cached_arguments)
+                    for mm in cached:
+                        mut_is_cached[mm] = (cached_return_res, cached_arguments)
 
-                    # The current followed path can be gotten from cache.
-                    if mut != MAINLINE and mut == get_logical_path():
-                        add_masked_mutants(set([mut]))
-                        act_muts = active_mutants()
+                        # The current followed path can be gotten from cache.
+                        if mm != MAINLINE and mm == get_logical_path():
+                            act_muts = active_mutants()
 
-                        if not act_muts:
-                            break
+                            if not act_muts:
+                                break
 
-                        set_logical_path(act_muts.pop())
-
-        reset_function_seen_masked()
+                            set_logical_path(act_muts.pop())
 
         # Remove paths from sv arguments that are cached.
         args, kwargs = prune_cached_muts(mut_is_cached.keys(), *args, **kwargs)
@@ -185,13 +196,14 @@ def call_maybe_cache(f, *args, **kwargs):
 
         # If current path is mainline or some args are not cached then execute the function.
         if get_logical_path() == MAINLINE or \
-                set(untainted_args) == set([MAINLINE]) or \
-                set(untainted_args) - set(mut_is_cached) - set([MAINLINE]):
+                set(untainted_args) - set(mut_is_cached):
             # Get a copy of the args before executing the function as they could be changed.
             if get_logical_path() == MAINLINE:
                 mainline_args_copy = copy_args(*untainted_args[MAINLINE])
             else:
                 mainline_args_copy = None
+
+            got_stop = False
 
             try:
                 res = f(*args, **kwargs)
@@ -200,7 +212,11 @@ def call_maybe_cache(f, *args, **kwargs):
                 logger.error(f"Error: {message}")
                 raise NotImplementedError(f"Exceptions in wrapped functions are not supported: {message}")
             except ShadowExceptionStop as e:
-                raise e
+                # Got no result from function execution, reraise if nothing is cached, else return that.
+                if len(mut_is_cached) == 0:
+                    raise e
+                else:
+                    got_stop = True
             except RecursionError as e:
                 raise e
             except Exception as e:
@@ -209,33 +225,35 @@ def call_maybe_cache(f, *args, **kwargs):
                 logger.error(f"Error: {message}")
                 raise NotImplementedError(f"Exceptions in wrapped functions are not supported: {message}")
             finally:
-                function_seen_mutants, _ = get_function_seen_masked()
-                reset_path_variables(starting_logical_path, before_logical_path, before_function_seen, mut_is_cached.keys())
+                reset_path_variables(starting_logical_path, before_logical_path, mut_is_cached.keys())
 
-            assert get_logical_path() not in get_masked_mutants()
-            # Convert result to SV.
-            res = ShadowVariable(res, from_mapping=False)
-            res._keep_active(get_seen_mutants(), get_masked_mutants())
+            if got_stop:
+                # There is no return value, make an empty one.
+                res_shadow = {}
+            else:
+                # Convert result to SV.
+                res = ShadowVariable(res, from_mapping=False)
+                res._keep_active(get_seen_mutants(), get_masked_mutants())
+                res_shadow = res._shadow
 
             # Update result with cached values.
-            res_shadow = res._shadow
             for mut, (cached_return_res, _) in mut_is_cached.items():
                 if mut == MAINLINE:
                     if get_logical_path() == MAINLINE:
                         assert MAINLINE in res_shadow
                     continue
-                assert mut not in res_shadow
-                res_shadow[mut] = cached_return_res
+                if mut in res_shadow:
+                    assert res_shadow[mut] == cached_return_res
+                else:
+                    res_shadow[mut] = cached_return_res
+            res = ShadowVariable(res_shadow, from_mapping=True)
         else:
-            function_seen_mutants, _ = get_function_seen_masked()
-            reset_path_variables(starting_logical_path, before_logical_path, before_function_seen, mut_is_cached.keys())
+            reset_path_variables(starting_logical_path, before_logical_path, mut_is_cached.keys())
 
             # Initialize result with cached values.
             cached_mapping = {mut: cached_return_res for mut, (cached_return_res, _) in mut_is_cached.items()}
             res = ShadowVariable(cached_mapping, from_mapping=True)
             res._keep_active(get_seen_mutants(), get_masked_mutants())
-
-        assert get_logical_path() not in get_masked_mutants()
 
         # Update res and arguments
         assert type(res) == ShadowVariable
@@ -268,8 +286,9 @@ def call_maybe_cache(f, *args, **kwargs):
                 mainline_res = res._shadow[MAINLINE]
                 assert mainline_args_copy is not None
                 mainline_args, mainline_kwargs = mainline_args_copy
-                key = f"{f.__name__, mainline_args, mainline_kwargs}"
+                key = f"{f.__name__, mainline_args, mainline_kwargs}" # OOS more efficient key
                 if key not in cache:
+                    function_seen_mutants = get_function_seen() - set([MAINLINE])
                     cache[key] = (mainline_res, untaint_args(*args, **kwargs)[MAINLINE], function_seen_mutants)
                     save_cache(cache, mut_stack)
 

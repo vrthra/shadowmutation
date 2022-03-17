@@ -75,6 +75,19 @@ def active_mutants() -> set[int]:
     return _SEEN_MUTANTS - _MASKED_MUTANTS
 
 
+def try_next_logical_path() -> None:
+    cur_active_mutants = active_mutants()
+    if len(cur_active_mutants) > 0:
+        set_logical_path(cur_active_mutants.pop())
+    else:
+        from .fork import get_forking_context
+        context = get_forking_context()
+        if context is not None:
+            context.child_end() # child fork ends here
+        else:
+            raise ShadowExceptionStop()
+
+
 def add_strongly_killed(mut: int) -> None:
     global _MASKED_MUTANTS
 
@@ -88,16 +101,7 @@ def add_strongly_killed(mut: int) -> None:
 
     if get_logical_path() == mut:
         if get_execution_mode().is_shadow_variant():
-            cur_active_mutants = active_mutants()
-            if len(cur_active_mutants) > 0:
-                set_logical_path(cur_active_mutants.pop())
-            else:
-                from .fork import get_forking_context
-                context = get_forking_context()
-                if context is not None:
-                    context.child_end() # child fork ends here
-                else:
-                    raise ShadowExceptionStop()
+            try_next_logical_path()
 
 
 def get_selected_mutant() -> Union[int, None]:
@@ -122,8 +126,12 @@ def get_seen_mutants() -> set[int]:
     return _SEEN_MUTANTS
 
 
-def get_function_seen_masked() -> set[int]:
-    return _FUNCTION_SEEN_MUTANTS, _FUNCTION_MASKED_MUTANTS
+def get_function_seen() -> set[int]:
+    return _FUNCTION_SEEN_MUTANTS
+
+
+def get_function_masked() -> set[int]:
+    return _FUNCTION_MASKED_MUTANTS
 
 
 def add_function_seen_mutants(muts: set[int]):
@@ -131,10 +139,13 @@ def add_function_seen_mutants(muts: set[int]):
     _FUNCTION_SEEN_MUTANTS |= muts
 
 
-def reset_function_seen_masked() -> set[int]:
+def reset_function_seen() -> set[int]:
     global _FUNCTION_SEEN_MUTANTS
-    global _FUNCTION_MASKED_MUTANTS
     _FUNCTION_SEEN_MUTANTS.clear()
+
+
+def reset_function_masked() -> set[int]:
+    global _FUNCTION_MASKED_MUTANTS
     _FUNCTION_MASKED_MUTANTS.clear()
 
 

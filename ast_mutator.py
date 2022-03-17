@@ -475,7 +475,7 @@ def generate_traditional_mutation(path, res_dir, function_ignore_regex, mut) -> 
         # print(mypy_result[0])
         return mut, False, mypy_result
     try:
-        subprocess.run(['python3', res_path], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=2)
+        subprocess.run(['python3', res_path], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=1)
     except subprocess.TimeoutExpired:
         shutil.move(res_path, mypy_filtered_dir/res_path.name)
         print('timed out:', mut)

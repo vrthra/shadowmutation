@@ -9,7 +9,7 @@ from tempfile import mkdtemp
 from typing import Any, Callable, Optional, TypeVar, Tuple, Union
 import pickle
 from json.decoder import JSONDecodeError
-from lib.utils import MAINLINE
+from lib.utils import MAINLINE, ShadowExceptionStop
 
 from lib.path import get_logical_path, get_masked_mutants, get_seen_mutants, load_shared, merge_strongly_killed, save_shared, set_logical_path, t_get_killed
 from .mode import get_execution_mode
@@ -219,6 +219,9 @@ class Forker():
         return all_child_results
 
     def child_end(self, fork_res: Any=None) -> Any:
+        if self.associated_path is None:
+            # This is the main thread not a child.
+            raise ShadowExceptionStop()
         assert self.associated_path is not None
         assert self.associated_path != MAINLINE
         assert self.parent_result_dir is not None
