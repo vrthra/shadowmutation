@@ -43,32 +43,16 @@ class ExecutionMode(Enum):
         return self == ExecutionMode.NOT_SPECIFIED
 
     def should_start_forker(self) -> bool:
-        if self in [
-            ExecutionMode.SPLIT_STREAM,
-            ExecutionMode.MODULO_EQV,
-            ExecutionMode.SHADOW_FORK_CHILD,
-            ExecutionMode.SHADOW_FORK_PARENT,
-            ExecutionMode.SHADOW_FORK_CACHE,
-        ]:
+        if self in _SHOULD_START_FORKER:
             return True
         else:
             return False
 
     def is_shadow_variant(self) -> bool:
-        return self in [
-            ExecutionMode.SHADOW,
-            ExecutionMode.SHADOW_CACHE,
-            ExecutionMode.SHADOW_FORK_CHILD,
-            ExecutionMode.SHADOW_FORK_PARENT,
-            ExecutionMode.SHADOW_FORK_CACHE
-        ]
+        return self in _IS_SHADOW_VARIANT
 
     def is_shadow_fork_variant(self) -> bool:
-        return self in [
-            ExecutionMode.SHADOW_FORK_CHILD,
-            ExecutionMode.SHADOW_FORK_PARENT,
-            ExecutionMode.SHADOW_FORK_CACHE
-        ]
+        return self in _IS_SHADOW_FORK_VARIANT
 
     def is_shadow_fork_child(self) -> bool:
         return self == ExecutionMode.SHADOW_FORK_CHILD
@@ -80,10 +64,7 @@ class ExecutionMode(Enum):
         return self == ExecutionMode.SHADOW_FORK_CACHE
 
     def is_split_stream_variant(self) -> bool:
-        if self in [ExecutionMode.SPLIT_STREAM, ExecutionMode.MODULO_EQV]:
-            return True
-        else:
-            return False
+        return self in _IS_SPLIT_STREAM_VARIANT
 
     def is_split_stream(self) -> bool:
         return self == ExecutionMode.SPLIT_STREAM
@@ -92,10 +73,34 @@ class ExecutionMode(Enum):
         return self == ExecutionMode.MODULO_EQV
 
     def uses_cache(self) -> bool:
-        if self in [ExecutionMode.SHADOW_CACHE, ExecutionMode.SHADOW_FORK_CACHE]:
-            return True
-        else:
-            return False
+        return self in _USES_CACHE
+
+
+_SHOULD_START_FORKER = set([
+    ExecutionMode.SPLIT_STREAM,
+    ExecutionMode.MODULO_EQV,
+    ExecutionMode.SHADOW_FORK_CHILD,
+    ExecutionMode.SHADOW_FORK_PARENT,
+    ExecutionMode.SHADOW_FORK_CACHE,
+])
+
+_IS_SHADOW_VARIANT = set([
+    ExecutionMode.SHADOW,
+    ExecutionMode.SHADOW_CACHE,
+    ExecutionMode.SHADOW_FORK_CHILD,
+    ExecutionMode.SHADOW_FORK_PARENT,
+    ExecutionMode.SHADOW_FORK_CACHE
+])
+
+_IS_SHADOW_FORK_VARIANT = set([
+    ExecutionMode.SHADOW_FORK_CHILD,
+    ExecutionMode.SHADOW_FORK_PARENT,
+    ExecutionMode.SHADOW_FORK_CACHE
+])
+
+_IS_SPLIT_STREAM_VARIANT = set([ExecutionMode.SPLIT_STREAM, ExecutionMode.MODULO_EQV])
+
+_USES_CACHE = set([ExecutionMode.SHADOW_CACHE, ExecutionMode.SHADOW_FORK_CACHE])
 
 
 _EXECUTION_MODE: ExecutionMode = ExecutionMode.NOT_SPECIFIED
