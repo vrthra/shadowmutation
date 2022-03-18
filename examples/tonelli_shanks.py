@@ -1,4 +1,4 @@
-def pow(base: int, exp: int, mod: int) -> int:
+def test_pow(base: int, exp: int, mod: int) -> int:
     res: int = base ** exp
     res = res % mod
     return res
@@ -11,7 +11,7 @@ def legendre_symbol(a: int, p: int) -> int:
     """
     ls = p - 1
     ls = ls//2
-    ls = pow(a, ls, p)
+    ls = test_pow(a, ls, p)
     p_less = p - 1
     if ls == p_less:
         return -1
@@ -43,7 +43,7 @@ def prime_mod_sqrt(a: int, p: int) -> list[int]:
     if p_mod == 3:
         x = p + 1
         x = x//4
-        x = pow(a, x, p)
+        x = test_pow(a, x, p)
         return [x, p-x]
 
     # Factor p-1 on the form q * 2^s (with Q odd)
@@ -71,13 +71,13 @@ def prime_mod_sqrt(a: int, p: int) -> list[int]:
             break
         z = z + 1
         max_iter = max_iter - 1
-    c = pow(z, q, p)
+    c = test_pow(z, q, p)
 
     # Search for a solution
     x = q + 1
     x = x//2
-    x = pow(a, x, p)
-    t = pow(a, q, p)
+    x = test_pow(a, x, p)
+    t = test_pow(a, q, p)
     m = s
     max_iter_outer = 10
     while True:
@@ -95,7 +95,7 @@ def prime_mod_sqrt(a: int, p: int) -> list[int]:
                 break
             if i > m:
                 break
-            pp = pow(t, e, p)
+            pp = test_pow(t, e, p)
             if pp == 1:
                 break
             e = e * 2
@@ -106,7 +106,7 @@ def prime_mod_sqrt(a: int, p: int) -> list[int]:
         b = m - i
         b = b - 1
         b = 2**b
-        b = pow(c, b, p)
+        b = test_pow(c, b, p)
 
         x = x * b
         x = x % p

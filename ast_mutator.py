@@ -341,7 +341,7 @@ def f():
                 "right != 1",
                 "right + 1",
                 "right * 2",
-                "not right",
+                # "not right",
             ]:
                 cur_mut_ctr = self.mutation_counter.get()
                 if assign_is_mutated:
