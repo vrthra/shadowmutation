@@ -5,7 +5,7 @@ from functools import wraps
 from itertools import chain
 from lib.utils import MAINLINE, ShadowException, ShadowExceptionStop
 from lib.fork import get_forking_context, new_forking_context, set_forking_context
-from lib.path import active_mutants, get_logical_path, get_masked_mutants, get_seen_mutants, get_strongly_killed, try_next_logical_path, set_logical_path, set_masked_mutants
+from lib.path import active_mutants, add_strongly_killed, get_logical_path, get_masked_mutants, get_seen_mutants, get_strongly_killed, try_next_logical_path, set_logical_path, set_masked_mutants
 from lib.shadow_variable import ShadowVariable, copy_args, set_new_no_init, unset_new_no_init
 from lib.cache import push_cache_stack, pop_cache_stack, call_maybe_cache
 
@@ -22,11 +22,16 @@ def fork_wrap(f, *args, **kwargs):
     push_cache_stack()
     try:
         res = call_maybe_cache(f, *args, **kwargs)
+    except ShadowException as e:
+        set_forking_context(old_forking_context)
+        for mut in active_mutants():
+            add_strongly_killed(mut)
+        raise NotImplementedError("This should never be reached.")
     except ShadowExceptionStop:
         # Mainline should stop, there are not results. Reset forking context and stop path.
         set_forking_context(old_forking_context)
         try_next_logical_path()
-        raise ValueError("This should never be reached.")
+        raise NotImplementedError("This should never be reached.")
 
     mainline_result, fork_results = forking_context.wait_for_forks(fork_res=(res, args, kwargs))
     pop_cache_stack()
@@ -114,7 +119,8 @@ def no_fork_wrap(f, *args, **kwargs):
             remaining_paths -= get_strongly_killed()
             continue 
         except ShadowException as e:
-            logger.debug(f"shadow exception: {e}")
+            for mut in active_mutants():
+                add_strongly_killed(mut)
             remaining_paths -= get_strongly_killed()
             continue 
         after_masked = deepcopy(get_masked_mutants())

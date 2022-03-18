@@ -8,7 +8,7 @@ import types
 from typing import Any, Callable, Dict, Iterable, Tuple, TypeVar, Union
 
 from lib.path import active_mutants, add_function_seen_mutants, add_masked_mutants, add_seen_mutants, add_strongly_killed, get_logical_path, get_masked_mutants, get_seen_mutants, get_selected_mutant, get_strongly_killed, set_selected_mutant
-from lib.utils import MAINLINE, PRIMITIVE_TYPES, ShadowExceptionStop
+from lib.utils import MAINLINE, PRIMITIVE_TYPES, ShadowExceptionStop, ShadowException
 from lib.mode import get_execution_mode
 
 
@@ -783,7 +783,7 @@ class ShadowVariable():
                     add_strongly_killed(k)
                 else:
                     # logger.debug(f"mainline value exception {e}")
-                    raise e
+                    raise ShadowException(e)
                 continue
             except Exception as e:
                 logger.error(f"Unknown Exception: {e}")
@@ -1002,7 +1002,7 @@ def t_combine_shadow(mutations: dict[int, Any]) -> Any:
                 res = res()
             except ShadowExceptionStop as e:
                 raise e
-            except Exception as e:
+            except ShadowException as e:
                 # Mainline value causes an exception
                 if mut == MAINLINE:
                     if get_logical_path() == MAINLINE:
@@ -1023,6 +1023,8 @@ def t_combine_shadow(mutations: dict[int, Any]) -> Any:
                         add_strongly_killed(mut)
 
                 continue
+            except Exception as e:
+                raise e
             finally:
                 set_selected_mutant(None)
 

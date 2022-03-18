@@ -10,7 +10,7 @@ import traceback
 from typing import Any, Iterable, Union
 from lib.utils import MAINLINE, ShadowException, ShadowExceptionStop
 from lib.mode import get_execution_mode
-from lib.path import active_mutants, add_function_seen_mutants, add_masked_mutants, add_seen_mutants, get_logical_path, get_masked_mutants, get_seen_mutants, remove_masked_mutants, set_logical_path, reset_function_seen, reset_function_masked, get_function_seen
+from lib.path import active_mutants, add_function_seen_mutants, add_masked_mutants, add_seen_mutants, add_strongly_killed, get_logical_path, get_masked_mutants, get_seen_mutants, remove_masked_mutants, set_logical_path, reset_function_seen, reset_function_masked, get_function_seen
 from lib.shadow_variable import ShadowVariable, copy_args, set_new_no_init, unset_new_no_init, untaint_args
 from lib.fork import get_forking_context
 import logging
@@ -159,7 +159,7 @@ def call_maybe_cache(f, *args, **kwargs):
 
         # For each path check if function / args combo is cached.
         before_logical_path = get_logical_path()
-        is_cached = []
+        mut_is_cached = {}
         for mut, (mut_args, mut_kwargs) in untainted_args.items():
             # Never load cached mainline if we are on mainline.
             if mut == MAINLINE == get_logical_path():
@@ -173,18 +173,14 @@ def call_maybe_cache(f, *args, **kwargs):
                     # paths in untainted for that active mutant.
                     cached = active_mutants() - untainted_args.keys()
                     # Of those mutants only get the cached value if the mutant is not seen during execution
+                    if get_logical_path() == MAINLINE:
+                        cached |= set([MAINLINE])
                     cached -=  cached_seen_muts
                 elif mut not in cached_seen_muts:
                     cached = set([mut])
                 else:
                     continue
 
-                is_cached.append((cached, cached_return_res, cached_arguments, cached_seen_muts))
-
-        mut_is_cached = {}
-        if len(untainted_args.keys() - set(chain(*[cc[0] for cc in is_cached]))) == 0:
-            for cc in is_cached:
-                cached, cached_return_res, cached_arguments, cached_seen_muts = cc
                 add_masked_mutants(cached - set([MAINLINE]))
                 add_seen_mutants(cached_seen_muts - set([MAINLINE]))
                 for mm in cached:
@@ -198,8 +194,6 @@ def call_maybe_cache(f, *args, **kwargs):
                             break
 
                         set_logical_path(act_muts.pop())
-        else:
-            assert len(mut_is_cached) == 0
 
         # Remove paths from sv arguments that are cached.
         args, kwargs = prune_cached_muts(mut_is_cached.keys(), *args, **kwargs)
@@ -220,9 +214,11 @@ def call_maybe_cache(f, *args, **kwargs):
             try:
                 res = f(*args, **kwargs)
             except ShadowException as e:
-                message = f"{e}, {traceback.format_exc()}"
-                logger.error(f"Error: {message}")
-                raise NotImplementedError(f"Exceptions in wrapped functions are not supported: {message}")
+                for mut in active_mutants():
+                    add_strongly_killed(mut)
+                # message = f"{e}, {traceback.format_exc()}"
+                # logger.error(f"Error: {message}")
+                # raise NotImplementedError(f"Exceptions in wrapped functions are not supported: {message}")
             except ShadowExceptionStop as e:
                 # Got no result from function execution, reraise if nothing is cached, else return that.
                 if len(mut_is_cached) == 0:
@@ -253,23 +249,38 @@ def call_maybe_cache(f, *args, **kwargs):
             reset_path_variables(starting_logical_path, before_logical_path, mut_is_cached.keys())
             res_shadow = {}
 
+        if get_logical_path() == MAINLINE:
+            assert MAINLINE in res_shadow
+
         # Update result with cached values.
         for mut, (cached_return_res, _) in mut_is_cached.items():
             if mut == MAINLINE:
-                if get_logical_path() == MAINLINE:
-                    assert MAINLINE in res_shadow
-            if MAINLINE in mut_is_cached:
-                # Do not add to res if mainline does have the same result, to reduce taints.
-                if mut_is_cached[MAINLINE][0] == cached_return_res:
-                    try:
-                        del res_shadow[mut]
-                    except:
-                        pass
-                    continue
-            if mut in res_shadow:
+                for mm in active_mutants():
+                    if mm not in res_shadow and mm not in mut_is_cached:
+                        res_shadow[mm] = cached_return_res
+
+            elif mut in res_shadow:
                 assert res_shadow[mut] == cached_return_res
+
             else:
                 res_shadow[mut] = cached_return_res
+
+            # if MAINLINE in mut_is_cached:
+            #     cached_mainline_res = mut_is_cached[MAINLINE][0]
+            #     # Do not add to res if mainline does have the same result, to reduce taints.
+            #     if cached_mainline_res == cached_return_res:
+            #         assert mut not in res_shadow
+            #         # try:
+            #         #     del res_shadow[mut]
+            #         # except:
+            #         #     pass
+
+            #     res_shadow[mut] = cached_return_res
+
+            # elif mut in res_shadow:
+            #     assert res_shadow[mut] == cached_return_res
+            # else:
+            #     res_shadow[mut] = cached_return_res
         res = ShadowVariable(res_shadow, from_mapping=True)
 
         # Update res and arguments
@@ -283,7 +294,6 @@ def call_maybe_cache(f, *args, **kwargs):
             if mut == MAINLINE:
                 if get_logical_path() == MAINLINE:
                     assert MAINLINE in res_shadow
-                continue
 
             for ii, aa in args_shadows:
                 if MAINLINE in mut_is_cached and mut_is_cached[MAINLINE][1][0][ii] == cached_args[ii]:
