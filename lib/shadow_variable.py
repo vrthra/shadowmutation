@@ -824,6 +824,8 @@ class ShadowVariable():
             only_other_shadows = other_shadow.keys() - common_shadows - set([MAINLINE]) - masked_shadows
 
             if only_self_shadows:
+                if MAINLINE not in other_shadow:
+                    raise ShadowException()
                 other_main = other_shadow[MAINLINE]
                 vs_ = self._do_op_safely(
                     ALLOWED_BOOL_DUNDER_METHODS,
@@ -838,6 +840,8 @@ class ShadowVariable():
                 vs_ = {}
 
             if only_other_shadows:
+                if MAINLINE not in self_shadow:
+                    raise ShadowException()
                 self_main = self_shadow[MAINLINE]
                 vo_ = self._do_op_safely(
                     ALLOWED_BOOL_DUNDER_METHODS,

@@ -112,8 +112,8 @@ def extract_data(data: dict[str, Any]) -> Any:
     return get_sorted(data, 'strong'), get_mode(data), subj_count(data), tool_count(data), subject_line_counts(data), tool_line_counts(data), float(runtime(data))
 
 
-def tool_lines_to_file(path, trad_tool_line, ss_tool_line, mod_tool_line, s_tool_line, sc_tool_line, sf_c_tool_line, sf_p_tool_line, sfc_tool_line):
-    all_lines = trad_tool_line.keys() | ss_tool_line.keys() | mod_tool_line.keys() | s_tool_line.keys() | sc_tool_line.keys() | sf_c_tool_line.keys() | sf_p_tool_line.keys() | sfc_tool_line.keys()
+def tool_lines_to_file(path, trad_tool_line, ss_tool_line, mod_tool_line, s_tool_line, sf_c_tool_line, sf_p_tool_line, sfc_tool_line):
+    all_lines = trad_tool_line.keys() | ss_tool_line.keys() | mod_tool_line.keys() | s_tool_line.keys() | sf_c_tool_line.keys() | sf_p_tool_line.keys() | sfc_tool_line.keys()
     trad_c_total = 0
     ss_c_total = 0
     modulo_c_total = 0
@@ -123,13 +123,13 @@ def tool_lines_to_file(path, trad_tool_line, ss_tool_line, mod_tool_line, s_tool
     sf_p_total = 0
     sfc_c_total = 0
     with open(path, 'wt') as f:
-        f.write("trad_tool_line, ss_tool_line, mod_tool_line, s_tool_line, sc_tool_line, sf_c_tool_line, sf_p_tool_line, sfc_tool_line\n")
+        f.write("trad_tool_line, ss_tool_line, mod_tool_line, s_tool_line, sf_c_tool_line, sf_p_tool_line, sfc_tool_line\n")
         for ll in sorted(all_lines):
             trad_c = trad_tool_line.get(ll, 0)
             ss_c = ss_tool_line.get(ll, 0)
             modulo_c = mod_tool_line.get(ll, 0)
             shadow_c = s_tool_line.get(ll, 0)
-            shadow_cache_c = sc_tool_line.get(ll, 0)
+            # shadow_cache_c = sc_tool_line.get(ll, 0)
             sf_c = sf_c_tool_line.get(ll, 0)
             sf_p = sf_p_tool_line.get(ll, 0)
             sfc_c = sfc_tool_line.get(ll, 0)
@@ -138,12 +138,13 @@ def tool_lines_to_file(path, trad_tool_line, ss_tool_line, mod_tool_line, s_tool
             ss_c_total += ss_c
             modulo_c_total += modulo_c
             shadow_c_total += shadow_c
-            shadow_cache_c_total += shadow_cache_c
+            # shadow_cache_c_total += shadow_cache_c
             sf_c_total += sf_c
             sf_p_total += sf_p
             sfc_c_total += sfc_c
 
-            f.write(f"{ll:>30}: {trad_c:10} {ss_c:10} {modulo_c:10} {shadow_c:10} {shadow_cache_c:10} {sf_c:10} {sf_p:10} {sfc_c:10}\n")
+            # f.write(f"{ll:>30}: {trad_c:10} {ss_c:10} {modulo_c:10} {shadow_c:10} {shadow_cache_c:10} {sf_c:10} {sf_p:10} {sfc_c:10}\n")
+            f.write(f"{ll:>30}: {trad_c:10} {ss_c:10} {modulo_c:10} {shadow_c:10} {sf_c:10} {sf_p:10} {sfc_c:10}\n")
 
     print("Tool lines sum:")
     print(trad_c_total, ss_c_total, modulo_c_total, shadow_c_total, shadow_cache_c_total, sf_c_total, sf_p_total, sfc_c_total)
@@ -196,9 +197,9 @@ def main():
         extract_data(get_res(Path(args.dir)/"shadow_execution.py", 'shadow'))
     print(s_killed, shadow_mode, s_subj_count, s_tool_count, f"{s_runtime:.2f}")
 
-    sc_killed, shadow_cache_mode, sc_subj_count, sc_tool_count, sc_subj_line, sc_tool_line, sc_runtime = \
-        extract_data(get_res(Path(args.dir)/"shadow_execution.py", 'shadow_cache'))
-    print(sc_killed, shadow_cache_mode, sc_subj_count, sc_tool_count, f"{sc_runtime:.2f}")
+    # sc_killed, shadow_cache_mode, sc_subj_count, sc_tool_count, sc_subj_line, sc_tool_line, sc_runtime = \
+    #     extract_data(get_res(Path(args.dir)/"shadow_execution.py", 'shadow_cache'))
+    # print(sc_killed, shadow_cache_mode, sc_subj_count, sc_tool_count, f"{sc_runtime:.2f}")
 
     sf_c_killed, sf_c_mode, sf_c_subj_count, sf_c_tool_count, sf_c_subj_line, sf_c_tool_line, sf_c_runtime = \
         extract_data(get_res(Path(args.dir)/"shadow_execution.py", 'shadow_fork_child'))
@@ -227,7 +228,7 @@ def main():
         ss_c = ss_subj_line.get(ll, 0)
         modulo_c = mod_subj_line.get(ll, 0)
         shadow_c = s_subj_line.get(ll, 0)
-        shadow_cache_c = sc_subj_line.get(ll, 0)
+        # shadow_cache_c = sc_subj_line.get(ll, 0)
         sf_c = sf_c_subj_line.get(ll, 0)
         sf_p = sf_p_subj_line.get(ll, 0)
         sfc_c = sfc_subj_line.get(ll, 0)
@@ -236,21 +237,23 @@ def main():
         ss_c_total += ss_c
         modulo_c_total += modulo_c
         shadow_c_total += shadow_c
-        shadow_cache_c_total += shadow_cache_c
+        # shadow_cache_c_total += shadow_cache_c
         sf_c_total += sf_c
         sf_p_total += sf_p
         sfc_c_total += sfc_c
 
-        print(f"{ll:4}: {trad_c:10} {ss_c:10} {modulo_c:10} {shadow_c:10} {shadow_cache_c:10} {sf_c:10} {sf_p:10} {sfc_c:10}")
+        # print(f"{ll:4}: {trad_c:10} {ss_c:10} {modulo_c:10} {shadow_c:10} {shadow_cache_c:10} {sf_c:10} {sf_p:10} {sfc_c:10}")
+        print(f"{ll:4}: {trad_c:10} {ss_c:10} {modulo_c:10} {shadow_c:10} {sf_c:10} {sf_p:10} {sfc_c:10}")
 
 
-    tool_lines_to_file(Path(args.dir)/'tool_lines.txt', trad_tool_line, ss_tool_line, mod_tool_line, s_tool_line, sc_tool_line, sf_c_tool_line, sf_p_tool_line, sfc_tool_line)
+    # tool_lines_to_file(Path(args.dir)/'tool_lines.txt', trad_tool_line, ss_tool_line, mod_tool_line, s_tool_line, sc_tool_line, sf_c_tool_line, sf_p_tool_line, sfc_tool_line)
+    tool_lines_to_file(Path(args.dir)/'tool_lines.txt', trad_tool_line, ss_tool_line, mod_tool_line, s_tool_line, sf_c_tool_line, sf_p_tool_line, sfc_tool_line)
 
 
     assert trad_killed == ss_killed
     assert trad_killed == mod_killed
     assert trad_killed == s_killed
-    assert trad_killed == sc_killed
+    # assert trad_killed == sc_killed
     assert trad_killed == sf_c_killed
     assert trad_killed == sf_p_killed
     assert trad_killed == sfc_killed
@@ -258,7 +261,7 @@ def main():
     assert ss_mode == "SPLIT_STREAM"
     assert modulo_mode == "MODULO_EQV"
     assert shadow_mode == "SHADOW"
-    assert shadow_cache_mode == "SHADOW_CACHE"
+    # assert shadow_cache_mode == "SHADOW_CACHE"
     assert sf_c_mode == "SHADOW_FORK_CHILD"
     assert sf_p_mode == "SHADOW_FORK_PARENT"
     assert sfc_mode == "SHADOW_FORK_CACHE"
@@ -267,7 +270,7 @@ def main():
     assert ss_c_total == ss_subj_count
     assert modulo_c_total == mod_subj_count
     assert shadow_c_total == s_subj_count
-    assert shadow_cache_c_total == sc_subj_count
+    # assert shadow_cache_c_total == sc_subj_count
     assert sf_c_total == sf_c_subj_count, f"{sf_c_total}, {sf_c_subj_count}"
     assert sf_p_total == sf_p_subj_count, f"{sf_p_total}, {sf_p_subj_count}"
     assert sfc_c_total == sfc_subj_count
@@ -283,13 +286,13 @@ def main():
     print(num_lines, max_unfiltered, max_filtered, total_num_muts, filtered_num_muts)
 
     data = {
-        'mode':       ['traditional',   'split_stream', 'modulo_eqv',    'shadow',     'shadow_cache', 'shadow_fork_child', 'shadow_fork_parent', 'shadow_fork_cache'],
-        'killed':     [trad_killed,      ss_killed,      mod_killed,      s_killed,     sc_killed,      sf_c_killed,         sf_p_killed,          sfc_killed],
-        'subj_count': [trad_subj_count,  ss_subj_count,  mod_subj_count,  s_subj_count, sc_subj_count,  sf_c_subj_count,     sf_p_subj_count,      sfc_subj_count],
-        'tool_count': [trad_tool_count,  ss_tool_count,  mod_tool_count,  s_tool_count, sc_tool_count,  sf_c_tool_count,     sf_p_tool_count,      sfc_tool_count],
-        'runtime':    [trad_runtime,     ss_runtime,     mod_runtime,     s_runtime,    sc_runtime,     sf_c_runtime,        sf_p_runtime,         sfc_runtime],
-        'subj_dict':  [trad_subj_line,   ss_subj_line,   mod_subj_line,   s_subj_line,  sc_subj_line,   sf_c_subj_line,      sf_p_subj_line,       sfc_subj_line],
-        'tool_dict':  [trad_tool_line,   ss_tool_line,   mod_tool_line,   s_tool_line,  sc_tool_line,   sf_c_tool_line,      sf_p_tool_line,       sfc_tool_line],
+        'mode':       ['traditional',   'split_stream', 'modulo_eqv',    'shadow',      'shadow_fork_child', 'shadow_fork_parent', 'shadow_fork_cache'],
+        'killed':     [trad_killed,      ss_killed,      mod_killed,      s_killed,      sf_c_killed,         sf_p_killed,          sfc_killed],
+        'subj_count': [trad_subj_count,  ss_subj_count,  mod_subj_count,  s_subj_count,  sf_c_subj_count,     sf_p_subj_count,      sfc_subj_count],
+        'tool_count': [trad_tool_count,  ss_tool_count,  mod_tool_count,  s_tool_count,  sf_c_tool_count,     sf_p_tool_count,      sfc_tool_count],
+        'runtime':    [trad_runtime,     ss_runtime,     mod_runtime,     s_runtime,     sf_c_runtime,        sf_p_runtime,         sfc_runtime],
+        'subj_dict':  [trad_subj_line,   ss_subj_line,   mod_subj_line,   s_subj_line,   sf_c_subj_line,      sf_p_subj_line,       sfc_subj_line],
+        'tool_dict':  [trad_tool_line,   ss_tool_line,   mod_tool_line,   s_tool_line,   sf_c_tool_line,      sf_p_tool_line,       sfc_tool_line],
         'num_lines': num_lines,
         'total_num_muts': total_num_muts,
         'filtered_num_muts': filtered_num_muts,

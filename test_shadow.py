@@ -10,7 +10,7 @@ from shadow import reinit, t_final_exception_test, t_wrap, t_combine, t_wait_for
                    t_logical_path, t_seen_mutants, t_masked_mutants, ShadowVariable, t_class, t_active_mutants, t_sv
 from lib.fork import get_forking_context
 
-MODES = ['shadow', 'shadow_cache', 'shadow_fork_child', 'shadow_fork_parent', 'shadow_fork_cache'] # , 'shadow_fork', 'shadow_cache', 'shadow_fork_cache']
+MODES = ['shadow', 'shadow_fork_child', 'shadow_fork_parent', 'shadow_fork_cache'] #, 'shadow_cache'
 SPLIT_STREAM_MODES = ['split', 'modulo']
 
 if os.environ.get("TEST_SKIP_MODES") is not None:
@@ -809,8 +809,58 @@ def test_tonelli_shanks(mode) ->None:
     assert get_killed() == gen_killed([1, 4, 5, 6, 9, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 29, 30, 33, 35, 36, 37, 38, 39, 40, 41, 43, 45, 86, 87, 89, 90, 91, 92, 94, 95, 97, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 126, 128, 129, 130, 131, 135, 140, 148, 149, 151, 152, 153, 154, 156, 157, 158, 159, 160, 161, 162, 166, 171, 173, 174, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 187, 188, 189, 190, 191, 192, 194, 195, 203, 204, 205, 206, 207, 211, 212, 214, 215, 222, 224, 225, 226, 227, 229, 231, 232, 233, 234, 235, 246, 247, 249, 250, 251, 252, 253, 254, 255, 256, 257, 260, 262, 264, 265, 266, 267, 268, 270, 271, 272, 273, 274, 275, 276, 277, 278, 280, 281, 282, 283, 284, 285, 286, 287, 288, 289, 291, 292, 293, 294, 295, 296, 297, 298, 300, 301, 302, 303, 304, 305, 306, 307, 308, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 321, 322, 323, 324, 325, 326, 327, 328, 330, 331, 332, 333, 334, 335, 336, 339, 341, 342, 343, 344, 345, 346, 347, 348, 349, 353, 358])
 
 
+@pytest.mark.parametrize("mode", MODES)
+def test_unmutated_func(mode):
+    
+    @t_wrap
+    def comp_exp(a, b) ->None:
+        res = a**b
+        return res
+
+    @t_wrap
+    def test_it() ->None:
+        a = t_combine({0: 0, 1: 1, 2: 1, 3: 256, 4: 512})
+        res = comp_exp(42.00012351234, a)
+        t_assert(res == 1)
+
+    reinit(execution_mode=mode, no_atexit=True)
+
+    try:
+        test_it()
+    except Exception as e:
+        t_final_exception_test()
+
+    t_wait_for_forks()
+    killed = get_killed()
+    assert killed == gen_killed([1, 2, 3, 4])
+
+
 #################################################
 # real-world tests for split stream variants
+
+
+@pytest.mark.parametrize("mode", SPLIT_STREAM_MODES)
+def test_split_stream_unmutated_func(mode):
+    
+    def comp_exp(a, b) ->None:
+        res = a**b
+        return res
+
+    def test_it() ->None:
+        a = t_combine({0: 0, 1: 1, 2: 1, 3: 256, 4: 512})
+        res = comp_exp(42.00012351234, a)
+        t_assert(res == 1)
+
+    reinit(execution_mode=mode, no_atexit=True)
+
+    try:
+        test_it()
+    except Exception as e:
+        t_final_exception_test()
+
+    t_wait_for_forks()
+    killed = get_killed()
+    assert killed == gen_killed([1, 2, 3, 4])
 
 
 @pytest.mark.skipif(os.environ.get("TEST_SKIP_SPLIT_MODES") is not None, reason="Skip split variant tests.")
@@ -875,7 +925,6 @@ def test_approx_exp_split_stream(mode):
     killed = get_killed()
     print(killed)
     assert killed == gen_killed([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 18, 21, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 37, 38, 40, 41, 44, 46, 47, 49, 50, 51, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 87, 88, 89, 90, 91, 92, 96, 97, 98, 101, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 117, 118, 119, 120, 121, 122, 123, 125, 126, 128, 131, 132, 134, 135, 136, 141, 142, 143, 144, 145, 147, 148, 149, 150, 151, 152, 153, 154, 155, 157, 158, 159, 160, 161, 162, 163, 164, 166, 168, 169, 171, 172, 173, 176, 177, 182, 183, 184, 187, 192, 193, 194, 197, 201, 202, 203, 206])
-    
 
 
 #################################################

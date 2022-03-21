@@ -4,7 +4,8 @@ from functools import reduce
 import json
 from pathlib import Path
 
-MODES = [r'\mT', r'\mSS', r'\mMS', r'\mETNfNm', r'\mETNf', r'\mETFcNm', r'\mETFpNm', r'\mET']
+# MODES = [r'\mT', r'\mSS', r'\mMS', r'\mETNfNm', r'\mETNf', r'\mETFcNm', r'\mETFpNm', r'\mET']
+MODES = [r'\mT', r'\mSS', r'\mMS', r'\mETNfNm', r'\mETFcNm', r'\mETFpNm', r'\mET']
 
 hline = r"\hline"
 
@@ -90,7 +91,6 @@ def main() -> None:
     print_table(data, 'runtime', '.2f')
     print("="*80)
 
-    print(data['euler'].keys())
     subject_stats(data)
 
 

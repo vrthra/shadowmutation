@@ -10,7 +10,7 @@ import traceback
 from typing import Any, Iterable, Union
 from lib.utils import MAINLINE, ShadowException, ShadowExceptionStop
 from lib.mode import get_execution_mode
-from lib.path import active_mutants, add_function_seen_mutants, add_masked_mutants, add_seen_mutants, add_strongly_killed, get_logical_path, get_masked_mutants, get_seen_mutants, remove_masked_mutants, set_logical_path, reset_function_seen, reset_function_masked, get_function_seen
+from lib.path import active_mutants, add_function_seen_mutants, add_masked_mutants, add_seen_mutants, add_strongly_killed, get_logical_path, get_masked_mutants, get_seen_mutants, get_strongly_killed, remove_masked_mutants, set_logical_path, reset_function_seen, reset_function_masked, get_function_seen
 from lib.shadow_variable import ShadowVariable, copy_args, set_new_no_init, unset_new_no_init, untaint_args
 from lib.fork import get_forking_context
 import logging
@@ -127,7 +127,7 @@ def function_is_wrapped(func):
 
 
 def reset_path_variables(starting_logical, before_logical, added_mask):
-    remove_masked_mutants(added_mask)
+    remove_masked_mutants(added_mask - get_strongly_killed())
 
     logical_path_after_func = get_logical_path()
     if logical_path_after_func != starting_logical:
@@ -169,13 +169,10 @@ def call_maybe_cache(f, *args, **kwargs):
             if key in cache:
                 cached_return_res, cached_arguments, cached_seen_muts = cache[key]
                 if mut == MAINLINE:
-                    # All possible active mutants that get their value from mainline, that is there are no other 
-                    # paths in untainted for that active mutant.
-                    cached = active_mutants() - untainted_args.keys()
-                    # Of those mutants only get the cached value if the mutant is not seen during execution
-                    if get_logical_path() == MAINLINE:
-                        cached |= set([MAINLINE])
-                    cached -=  cached_seen_muts
+                    if get_logical_path() != MAINLINE and mut not in cached_seen_muts:
+                        cached = set([mut])
+                    else:
+                        continue
                 elif mut not in cached_seen_muts:
                     cached = set([mut])
                 else:
@@ -201,8 +198,7 @@ def call_maybe_cache(f, *args, **kwargs):
         starting_logical_path = get_logical_path()
 
         # If current path is mainline or some args are not cached then execute the function.
-        if get_logical_path() == MAINLINE or \
-                len(set(untainted_args) - set(mut_is_cached)) > 0:
+        if get_logical_path() == MAINLINE or len(set(untainted_args) - set(mut_is_cached)) > 0:
             # Get a copy of the args before executing the function as they could be changed.
             if get_logical_path() == MAINLINE:
                 mainline_args_copy = copy_args(*untainted_args[MAINLINE])
@@ -254,13 +250,8 @@ def call_maybe_cache(f, *args, **kwargs):
 
         # Update result with cached values.
         for mut, (cached_return_res, _) in mut_is_cached.items():
-            if mut == MAINLINE:
-                for mm in active_mutants():
-                    if mm not in res_shadow and mm not in mut_is_cached:
-                        res_shadow[mm] = cached_return_res
-
-            elif mut in res_shadow:
-                assert res_shadow[mut] == cached_return_res
+            if mut in res_shadow:
+                assert get_logical_path() != MAINLINE
 
             else:
                 res_shadow[mut] = cached_return_res
@@ -296,24 +287,16 @@ def call_maybe_cache(f, *args, **kwargs):
                     assert MAINLINE in res_shadow
 
             for ii, aa in args_shadows:
-                if MAINLINE in mut_is_cached and mut_is_cached[MAINLINE][1][0][ii] == cached_args[ii]:
-                    try:
-                        del aa[mut]
-                    except:
-                        pass
-                else:
-                    assert mut not in aa
+                if mut not in aa:
                     aa[mut] = cached_args[ii]
+                else:
+                    assert get_logical_path() != MAINLINE
 
             for ii, aa in kwargs_shadows:
-                if MAINLINE in mut_is_cached and mut_is_cached[MAINLINE][1][1][ii] == cached_kwargs[ii]:
-                    try:
-                        del aa[mut]
-                    except:
-                        pass
-                else:
-                    assert mut not in aa
+                if mut not in aa:
                     aa[mut] = cached_kwargs[ii]
+                else:
+                    assert get_logical_path() != MAINLINE
 
 
         if get_logical_path() == MAINLINE:

@@ -146,16 +146,23 @@ def t_gather_results() -> Any:
     return results
 
 
+def mark_current_execution_killed():
+    # Current execution is crashing, mark all active mutants as strongly killed
+    if get_execution_mode().is_split_stream_variant():
+        for mut in get_ns_active_mutants():
+            add_strongly_killed(mut)
+    elif get_execution_mode().is_shadow_variant():
+        for mut in active_mutants():
+            add_strongly_killed(mut)
+
+
 def t_final_exception() -> None:
-    # Program is crashing, mark all active mutants as strongly killed
-    for mut in active_mutants():
-        add_strongly_killed(mut)
+    mark_current_execution_killed()
     t_gather_results()
 
 
 def t_final_exception_test() -> None:
-    for mut in active_mutants():
-        add_strongly_killed(mut)
+    mark_current_execution_killed()
     t_wait_for_forks()
 
 
