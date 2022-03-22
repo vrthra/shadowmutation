@@ -1,4 +1,4 @@
-# Collection of constants used
+# Collection of constants and exceptions
 
 MAINLINE = 0
 
@@ -7,7 +7,7 @@ PRIMITIVE_TYPES = [bool, int, float]
 
 
 class ShadowExceptionStop(Exception):
-    """No more mutants stop this execution."""
+    """No more mutants alive, stop this execution."""
     pass
 
 
