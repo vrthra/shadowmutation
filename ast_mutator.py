@@ -5,6 +5,7 @@ import re
 import shutil
 import json
 import subprocess
+import time
 from functools import partial
 from pathlib import Path
 from typing import NamedTuple, Tuple, Union, Any
@@ -478,7 +479,7 @@ def generate_traditional_mutation(path, res_dir, function_ignore_regex, mut) -> 
         subprocess.run(['python3', res_path], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=1)
     except subprocess.TimeoutExpired:
         shutil.move(res_path, mypy_filtered_dir/res_path.name)
-        print('timed out:', mut)
+        # print('timed out:', mut)
         return mut, False, mypy_result
     return mut, True, mypy_result
 
@@ -541,6 +542,7 @@ def to_source(tree):
 
 
 def main():
+    start = time.time()
     parser = argparse.ArgumentParser()
     parser.add_argument('--ignore', help="Regex to ignore matching function names.", default=None)
     parser.add_argument('--active', help="Specify a specific testing type to generate, else use all.", default=None)
@@ -554,13 +556,15 @@ def main():
     # print("Checking input file with mypy:")
     mypy_result = api.run([str(args.source)])
     if mypy_result[2] != 0:
+        print("mypy: ======")
         print(mypy_result[0].strip())
+        print(mypy_result[1].strip())
+        print("======")
         raise ValueError("Source file does not pass type checking, fix first.")
 
     shutil.copy(args.source, result_dir/'original.py')
 
     mutations = collect_mutations(args.source, args.ignore)
-    print(f"There are {len(mutations)} possible mutations.")
 
     filtered_mutations = []
     import sys
@@ -579,7 +583,7 @@ def main():
             pass
         sys.stdout.flush()
         
-    print(f"Filtered mutations:", len(filtered_mutations), sorted(filtered_mutations))
+    print(f"There are {len(mutations)} possible mutations. Filtered mutations: {len(filtered_mutations)}. Took {time.time() - start:.2f} sec.")
 
     generate_split_stream(args.source, result_dir, args.ignore, filtered_mutations)
     generate_shadow(args.source, result_dir, args.ignore, filtered_mutations)

@@ -1,20 +1,38 @@
-.PHONY: all bank test do-2.1
+.PHONY: all clean short long
 
 export PYTHONPATH := $(shell pwd):$(PYTHONPATH)
 
-EXAMPLES := $(wildcard examples/*.py)
-SUBJECTS := $(notdir $(EXAMPLES:.py=))
+EXAMPLES_LONG := $(wildcard examples_long/*.py)
+EXAMPLES_SHORT := $(wildcard examples_short/*.py)
+SUBJECTS_LONG := $(EXAMPLES_LONG:.py=)
+SUBJECTS_SHORT := $(EXAMPLES_SHORT:.py=)
 
-all: test $(SUBJECTS) tables
+all: test short long tables
+
+ifndef VERBOSE
+.SILENT:
+endif
 
 clean:
 	rm -rf tmp
 
-$(SUBJECTS): | tmp
-	@echo $@
-	rm -r tmp/$@ || true
-	python3 ./ast_mutator.py --ignore "^test_" examples/$@.py tmp/$@
-	python execute_versions.py tmp/$@
+short: $(SUBJECTS_SHORT)
+
+$(SUBJECTS_SHORT): PROG=$(notdir $@)
+$(SUBJECTS_SHORT): | tmp
+	@echo "$@ -> $(PROG)"
+	rm -r tmp/short/$(PROG) || true
+	python3 ./ast_mutator.py --ignore "^test_" examples_short/$(PROG).py tmp/short/$(PROG)
+	python execute_versions.py tmp/short/$(PROG)
+
+long: $(SUBJECTS_LONG)
+
+$(SUBJECTS_LONG): PROG=$(notdir $@)
+$(SUBJECTS_LONG): | tmp
+	@echo "$@ -> $(PROG)"
+	rm -r tmp/long/$(PROG) || true
+	python3 ./ast_mutator.py --ignore "^test_" examples_long/$(PROG).py tmp/long/$(PROG)
+	EXEC_NO_TRACE=1 python execute_versions.py tmp/long/$(PROG)
 
 dev:
 	# TRACE=1 python3 tmp/approx_exp/traditional_33.py
@@ -41,4 +59,3 @@ tmp:
 
 tables:
 	python3 print_tables.py
-

@@ -9,7 +9,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Optional
 
-
+os.getenv('EXEC_NO_TRACE', '0')
 EXEC_WITH_TRACE = os.getenv('EXEC_NO_TRACE', '0') == '0'
 
 
@@ -153,6 +153,7 @@ def tool_lines_to_file(path, trad_tool_line, ss_tool_line, mod_tool_line, s_tool
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('dir', help="Path to ast_mutator result dir.")
+    parser.add_argument('--no-instr', help="Do not count instructions.")
     args = parser.parse_args()
 
     run_it(Path(args.dir)/'original.py', False)
@@ -182,20 +183,20 @@ def main():
             traditional_results['alive'].append(mut_id)
     trad_killed = sorted(traditional_results['killed'])
     print("Comparing results:")
-    print(trad_killed, "TRADITIONAL", trad_subj_count, trad_tool_count, f"{trad_runtime:.2f}")
+    print(f"TRADITIONAL        {len(trad_killed):>4}, {trad_subj_count:>4}, {trad_tool_count:>4}, {trad_runtime:6.2f}")
 
 
     ss_killed, ss_mode, ss_subj_count, ss_tool_count, ss_subj_line, ss_tool_line, ss_runtime = \
         extract_data(get_res(Path(args.dir)/"split_stream.py",     'split'))
-    print(ss_killed, ss_mode, ss_subj_count, ss_tool_count, f"{ss_runtime:.2f}")
+    print(f"{ss_mode:<18} {len(ss_killed):>4}, {ss_subj_count:>4}, {ss_tool_count:>4}, {ss_runtime:6.2f}")
 
     mod_killed, modulo_mode, mod_subj_count, mod_tool_count, mod_subj_line, mod_tool_line, mod_runtime = \
         extract_data(get_res(Path(args.dir)/"split_stream.py",     'modulo'))
-    print(mod_killed, modulo_mode, mod_subj_count, mod_tool_count, f"{mod_runtime:.2f}")
+    print(f"{modulo_mode:<18} {len(mod_killed):>4}, {mod_subj_count:>4}, {mod_tool_count:>4}, {mod_runtime:6.2f}")
 
     s_killed, shadow_mode, s_subj_count, s_tool_count, s_subj_line, s_tool_line, s_runtime = \
         extract_data(get_res(Path(args.dir)/"shadow_execution.py", 'shadow'))
-    print(s_killed, shadow_mode, s_subj_count, s_tool_count, f"{s_runtime:.2f}")
+    print(f"{shadow_mode:<18} {len(s_killed):>4}, {s_subj_count:>4}, {s_tool_count:>4}, {s_runtime:6.2f}")
 
     # sc_killed, shadow_cache_mode, sc_subj_count, sc_tool_count, sc_subj_line, sc_tool_line, sc_runtime = \
     #     extract_data(get_res(Path(args.dir)/"shadow_execution.py", 'shadow_cache'))
@@ -203,15 +204,15 @@ def main():
 
     sf_c_killed, sf_c_mode, sf_c_subj_count, sf_c_tool_count, sf_c_subj_line, sf_c_tool_line, sf_c_runtime = \
         extract_data(get_res(Path(args.dir)/"shadow_execution.py", 'shadow_fork_child'))
-    print(sf_c_killed, sf_c_mode, sf_c_subj_count, sf_c_tool_count, f"{sf_c_runtime:.2f}")
+    print(f"{sf_c_mode:<18} {len(sf_c_killed):>4}, {sf_c_subj_count:>4}, {sf_c_tool_count:>4}, {sf_c_runtime:6.2f}")
 
     sf_p_killed, sf_p_mode, sf_p_subj_count, sf_p_tool_count, sf_p_subj_line, sf_p_tool_line, sf_p_runtime = \
         extract_data(get_res(Path(args.dir)/"shadow_execution.py", 'shadow_fork_parent'))
-    print(sf_p_killed, sf_p_mode, sf_p_subj_count, sf_p_tool_count, f"{sf_p_runtime:.2f}")
+    print(f"{sf_p_mode:<18} {len(sf_p_killed):>4}, {sf_p_subj_count:>4}, {sf_p_tool_count:>4}, {sf_p_runtime:6.2f}")
 
     sfc_killed, sfc_mode, sfc_subj_count, sfc_tool_count, sfc_subj_line, sfc_tool_line, sfc_runtime = \
         extract_data(get_res(Path(args.dir)/"shadow_execution.py", 'shadow_fork_cache'))
-    print(sfc_killed, sfc_mode, sfc_subj_count, sfc_tool_count, f"{sfc_runtime:.2f}")
+    print(f"{sfc_mode:<18} {len(sfc_killed):>4}, {sfc_subj_count:>4}, {sfc_tool_count:>4}, {sfc_runtime:6.2f}")
 
 
     all_lines = trad_subj_line.keys() | ss_subj_line.keys() | mod_subj_line.keys() | sf_c_subj_line.keys()
@@ -283,7 +284,7 @@ def main():
     total_num_muts = max((max_unfiltered, max_filtered))
     filtered_num_muts = len(unfiltered) - 1 # -1 as traditional_0.py is not a mutated version
 
-    print(num_lines, max_unfiltered, max_filtered, total_num_muts, filtered_num_muts)
+    print(f"num lines: {num_lines}, total num muts: {total_num_muts}, filtered num muts: {filtered_num_muts}")
 
     data = {
         'mode':       ['traditional',   'split_stream', 'modulo_eqv',    'shadow',      'shadow_fork_child', 'shadow_fork_parent', 'shadow_fork_cache'],
